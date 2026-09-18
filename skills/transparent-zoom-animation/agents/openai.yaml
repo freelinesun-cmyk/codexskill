@@ -1,0 +1,3 @@
+interface:
+  display_name: "按钮循环放大"
+  short_description: "将透明 PNG 制作成无裁切循环放大 GIF 与动画 WebP"

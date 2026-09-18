@@ -1,0 +1,4 @@
+interface:
+  display_name: "录入每幕角色故事"
+  short_description: "从文档提取每幕角色故事并录入后台角色故事列表"
+  default_prompt: "使用 $import-character-stories 将文档中的每幕角色故事录入指定剧本后台。"

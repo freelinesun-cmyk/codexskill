@@ -1,0 +1,4 @@
+interface:
+  display_name: "《我是谜》剧本物料制作"
+  short_description: "整理回合、投票、线索表、调查点、场景图片和角色头像物料"
+  default_prompt: "使用 $woshimi-script-materials 整理这个《我是谜》剧本的标准录入物料。"

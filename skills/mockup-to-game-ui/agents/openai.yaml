@@ -1,0 +1,4 @@
+interface:
+  display_name: "示意图转游戏UI"
+  short_description: "用gpt-image-2将UI示意图转成分层PNG素材和可编辑游戏界面"
+  default_prompt: "Use $mockup-to-game-ui to turn a UI mockup into layered PNG game UI assets with gpt-image-2, never SVG, and wire them into editable scene nodes."

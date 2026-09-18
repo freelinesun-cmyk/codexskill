@@ -1,0 +1,4 @@
+interface:
+  display_name: "woshimi 线索表格规范整理"
+  short_description: "将原始线索 Excel 整理为标准导入表并生成连续调查点 ID"
+  default_prompt: "使用 $format-clue-workbook 整理 woshimi 线索表格，并提供调查点起始 ID、线索技能-1 ID 和线索技能-2 ID。"

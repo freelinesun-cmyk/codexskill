@@ -1,0 +1,7 @@
+interface:
+  display_name: "百变剧本杀剧本素材与宣传物料"
+  short_description: "制作角色、场景、搜证按钮、音乐与推广全套物料"
+  default_prompt: "使用 $murder-mystery-materials，根据剧本资料制作角色、场景、五版搜证按钮、音乐和宣传物料。"
+
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,4 @@
+interface:
+  display_name: "《我是谜》剧本线索整理"
+  short_description: "从剧本文档提取线索并生成后台导入表格"
+  default_prompt: "请将这个剧本中的线索整理成《我是谜》后台可导入的标准六列表格。"

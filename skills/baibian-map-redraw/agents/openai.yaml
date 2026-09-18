@@ -1,0 +1,3 @@
+interface:
+  display_name: "百变剧本地图重绘"
+  short_description: "重绘剧本地图并保持原生 2880×2880 输出"

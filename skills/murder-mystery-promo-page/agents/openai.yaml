@@ -1,0 +1,4 @@
+interface:
+  display_name: "剧本杀宣传页制作"
+  short_description: "将剧本文案与角色素材转化为清晰易读的手机长图宣传页"
+  default_prompt: "使用 $murder-mystery-promo-page 为这个剧本制作一套手机端长图宣传页。"
