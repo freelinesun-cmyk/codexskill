@@ -1,0 +1,4 @@
+interface:
+  display_name: "剧本杀线索卡制作"
+  short_description: "从剧本文档提取线索，生成图文线索卡并合成为多线索PSD"
+  default_prompt: "使用 $murder-mystery-clue-cards 读取剧本文档与PSD模板，提取线索、生成16:9配图，并交付一个包含全部线索组的图文PSD。"

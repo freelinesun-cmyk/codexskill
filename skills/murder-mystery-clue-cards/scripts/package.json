@@ -1,0 +1,9 @@
+{
+  "name": "murder-mystery-clue-card-tools",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Validation helper for the murder-mystery-clue-cards skill.",
+  "dependencies": {
+    "ag-psd": "^30.2.0"
+  }
+}

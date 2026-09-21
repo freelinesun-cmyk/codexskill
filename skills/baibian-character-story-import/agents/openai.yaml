@@ -1,0 +1,4 @@
+interface:
+  display_name: "百变大侦探角色故事导入"
+  short_description: "提取剧本每幕角色故事，生成可校对的后台批量导入数据包"
+  default_prompt: "处理这份剧本文档，生成可由百变后台插件导入的角色故事 JSON 和校对目录。"

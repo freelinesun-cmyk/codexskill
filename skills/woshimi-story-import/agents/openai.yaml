@@ -1,0 +1,6 @@
+interface:
+  display_name: "我是谜剧本故事导入"
+  short_description: "从剧本文档生成分目录的故事、投票与复盘导入包"
+  default_prompt: "使用 $woshimi-story-import 读取剧本文档，生成故事、投票和复盘三类导入文件及校对文档。"
+policy:
+  allow_implicit_invocation: true
