@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "百变大侦探后台辅助工具",
+  "version": "2.44.0",
+  "description": "复制后台条件、批量导入及预览角色故事、批量创建后台数据，并在地点列表显示地图及坐标信息。",
+  "permissions": ["storage"],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://admin.mszmapp.com/16d7m/*",
+        "https://admin-test.mszmapp.com/16d7m/*",
+        "https://admin.mszmapp.com/16d7m/playbook/conditions*",
+        "https://admin-test.mszmapp.com/16d7m/playbook/conditions*",
+        "https://admin.mszmapp.com/16d7m/playbook/products*",
+        "https://admin-test.mszmapp.com/16d7m/playbook/products*",
+        "https://admin.mszmapp.com/16d7m/playbook/places*",
+        "https://admin-test.mszmapp.com/16d7m/playbook/places*",
+        "https://admin.mszmapp.com/16d7m/playbook/maps*",
+        "https://admin-test.mszmapp.com/16d7m/playbook/maps*",
+        "https://admin.mszmapp.com/16d7m/playbook/bmgs*",
+        "https://admin-test.mszmapp.com/16d7m/playbook/bmgs*",
+        "https://admin.mszmapp.com/16d7m/playbook/actions*",
+        "https://admin-test.mszmapp.com/16d7m/playbook/actions*",
+        "https://admin.mszmapp.com/16d7m/playbook/sceneevents*",
+        "https://admin-test.mszmapp.com/16d7m/playbook/sceneevents*",
+        "https://admin.mszmapp.com/16d7m/playbook/cluepackages*",
+        "https://admin-test.mszmapp.com/16d7m/playbook/cluepackages*",
+        "https://admin.mszmapp.com/16d7m/playbook/votepacks*",
+        "https://admin-test.mszmapp.com/16d7m/playbook/votepacks*",
+        "https://admin.mszmapp.com/16d7m/playbook/votes*",
+        "https://admin-test.mszmapp.com/16d7m/playbook/votes*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

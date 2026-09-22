@@ -58,3 +58,8 @@ git commit -m "Update personal Codex skills"
 ```
 
 Keep credentials and API keys out of this repository.
+
+## Browser extensions
+
+- `extensions/baibian-admin-helper`: 百变大侦探后台辅助工具。源码、使用说明、
+  版本记录和当前发布包均保存在该目录；发布流程见目录内的 `RELEASING.md`。

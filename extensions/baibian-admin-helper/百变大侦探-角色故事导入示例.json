@@ -1,0 +1,26 @@
+{
+  "schema": "baibian.characterStories.v1",
+  "formatVersion": 1,
+  "playbookId": "2501",
+  "source": {
+    "document": "示例剧本.docx"
+  },
+  "defaults": {
+    "category": "人设",
+    "visible": false,
+    "aiSummary": false,
+    "priority": 10
+  },
+  "records": [
+    {
+      "title": "第一幕",
+      "roles": ["角色甲"],
+      "category": "人设",
+      "visible": false,
+      "aiSummary": false,
+      "priority": 10,
+      "contentText": "这是普通文本。\n这一行包含需要强调的内容。",
+      "contentHtml": "<div>这是普通文本。</div><div><b>这一行加粗</b>，<span style=\"color: rgb(255, 0, 0);\">这一段是红色</span>。</div>"
+    }
+  ]
+}
