@@ -409,6 +409,351 @@
   updateButtons();
 })();
 
+// 回合动作列表：从 Excel/CSV 批量创建“强制角色进入地图”动作。
+(() => {
+  'use strict';
+
+  const STYLE_ID = 'bb-batch-map-action-import-style';
+  const MODAL_ID = 'bb-batch-map-action-import-modal';
+  const BUTTON_ATTRIBUTE = 'data-bb-batch-map-action-import';
+  let updateTimer = null;
+
+  const normalize = value => String(value ?? '').replace(/\u3000/g, ' ').replace(/\s+/g, ' ').trim();
+  const normalizeKey = value => normalize(value).toLowerCase();
+  const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[char]);
+  const isActionList = () => /\/playbook\/actions\/?$/.test(location.pathname);
+
+  function context() {
+    const url = new URL(location.href);
+    return {
+      playbookId: url.searchParams.get('playbook_id') || '',
+      relateId: url.searchParams.get('relate_id') || '',
+      relateType: url.searchParams.get('relate_type') || '',
+      basePath: url.pathname.match(/^\/[^/]+/)?.[0] || '/16d7m',
+    };
+  }
+
+  function addStyles() {
+    if (document.getElementById(STYLE_ID)) return;
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = `
+      .bb-batch-map-action-import-button { margin-left: 8px; }
+      #${MODAL_ID} { position: fixed; inset: 0; z-index: 999999; display: flex; align-items: center; justify-content: center; padding: 22px; background: rgba(0,0,0,.5); }
+      #${MODAL_ID} .bb-bmai-dialog { width: min(1120px, 97vw); max-height: 91vh; display: flex; flex-direction: column; overflow: hidden; border-radius: 7px; background: #fff; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+      #${MODAL_ID} .bb-bmai-header { padding: 20px 24px 12px; }
+      #${MODAL_ID} .bb-bmai-title { margin: 0 0 7px; color: #34495e; font-size: 24px; font-weight: 600; }
+      #${MODAL_ID} .bb-bmai-note { color: #6b7b8b; font-size: 14px; line-height: 1.65; }
+      #${MODAL_ID} .bb-bmai-tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 14px; }
+      #${MODAL_ID} .bb-bmai-tools input[type=file] { width: min(560px, 100%); }
+      #${MODAL_ID} .bb-bmai-body { min-height: 210px; padding: 8px 24px 18px; overflow: auto; }
+      #${MODAL_ID} .bb-bmai-status { padding: 14px; border-radius: 4px; color: #6b7b8b; background: #f4f7f9; white-space: pre-wrap; }
+      #${MODAL_ID} .bb-bmai-status.is-error { color: #c0392b; background: #fff2f0; }
+      #${MODAL_ID} .bb-bmai-summary { margin-bottom: 10px; color: #34495e; font-weight: 600; }
+      #${MODAL_ID} .bb-bmai-table-wrap { overflow: auto; border: 1px solid #d8e3ed; border-radius: 4px; }
+      #${MODAL_ID} table { width: 100%; min-width: 920px; margin: 0; border-collapse: collapse; }
+      #${MODAL_ID} th, #${MODAL_ID} td { padding: 9px 10px; border-bottom: 1px solid #edf1f4; text-align: left; vertical-align: top; }
+      #${MODAL_ID} th { color: #34495e; background: #f7f9fb; white-space: nowrap; }
+      #${MODAL_ID} tr:last-child td { border-bottom: 0; }
+      #${MODAL_ID} tr.is-error td { background: #fff5f4; }
+      #${MODAL_ID} .bb-bmai-ok { color: #00a65a; }
+      #${MODAL_ID} .bb-bmai-error { color: #dd4b39; }
+      #${MODAL_ID} .bb-bmai-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 24px 20px; border-top: 1px solid #edf1f4; }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  function closeModal() {
+    document.getElementById(MODAL_ID)?.remove();
+  }
+
+  function findActionForm(doc) {
+    return Array.from(doc.forms).find(form =>
+      String(form.method).toLowerCase() === 'post'
+      && form.querySelector('select[name="cate"] option[value="61"]')
+      && form.querySelector('select[name="json_a[]"]')
+      && form.querySelector('select[name="param_a"]')
+      && form.querySelector('select[name="pre_condition"]')
+    ) || null;
+  }
+
+  function optionRecords(select, kind) {
+    return Array.from(select?.options || []).map(option => {
+      const id = normalize(option.value);
+      let name = normalize(option.textContent);
+      if (kind === 'condition') name = name.replace(/\|\s*\d+\s*$/, '').trim();
+      return { id, name, rawName: normalize(option.textContent) };
+    }).filter(item => item.id);
+  }
+
+  async function loadReferences() {
+    const page = new URL(location.href);
+    page.searchParams.set('cate', '61');
+    const response = await fetch(page.href, { credentials: 'same-origin' });
+    if (!response.ok) throw new Error(`读取地图动作表单失败：HTTP ${response.status}`);
+    const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+    const form = findActionForm(doc);
+    if (!form) throw new Error('没有识别到“强制角色进入地图”创建表单');
+    const token = form.querySelector('input[name="_token"]')?.value
+      || doc.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+    if (!token) throw new Error('没有识别到动作表单令牌');
+    return {
+      formAction: new URL(form.getAttribute('action') || page.href, page.href).href,
+      token,
+      characters: optionRecords(form.querySelector('select[name="json_a[]"]'), 'character'),
+      maps: optionRecords(form.querySelector('select[name="param_a"]'), 'map')
+        .filter(item => /^\d+$/.test(item.id)),
+      conditions: optionRecords(form.querySelector('select[name="pre_condition"]'), 'condition')
+        .filter(item => /^\d+$/.test(item.id)),
+    };
+  }
+
+  function resolveOne(input, items, label) {
+    const source = normalize(input);
+    if (!source) return { error: `${label}不能为空` };
+    const byId = items.filter(item => item.id === source);
+    if (byId.length === 1) return { item: byId[0] };
+    const key = normalizeKey(source);
+    const byName = items.filter(item => normalizeKey(item.name) === key || normalizeKey(item.rawName) === key);
+    if (byName.length === 1) return { item: byName[0] };
+    if (byName.length > 1) return { error: `${label}“${source}”存在 ${byName.length} 个同名项，请改填 ID` };
+    return { error: `未匹配到${label}“${source}”` };
+  }
+
+  function resolveCharacters(input, items) {
+    const source = normalize(input);
+    if (!source) return { error: '角色不能为空' };
+    const parts = source.split(/[,，、;；\n]+/).map(normalize).filter(Boolean);
+    const matched = [];
+    const errors = [];
+    parts.forEach(part => {
+      const aliases = /^(全部角色|所有角色)$/i.test(part) ? '$all-characters' : part;
+      const result = resolveOne(aliases, items, '角色');
+      if (result.error) errors.push(result.error);
+      else if (!matched.some(item => item.id === result.item.id)) matched.push(result.item);
+    });
+    return errors.length ? { error: errors.join('；') } : { items: matched };
+  }
+
+  function cell(row, aliases) {
+    const key = Object.keys(row).find(header => aliases.includes(normalizeKey(header)));
+    return key ? normalize(row[key]) : '';
+  }
+
+  function buildRows(sheetRows, refs) {
+    return sheetRows.map((row, index) => {
+      const raw = {
+        name: cell(row, ['名称', '动作名称', 'name']),
+        character: cell(row, ['角色', '人物', 'character']),
+        map: cell(row, ['地图', 'map']),
+        condition: cell(row, ['条件', '先决条件', 'condition']),
+      };
+      const errors = [];
+      if (!raw.name) errors.push('名称不能为空');
+      const characters = resolveCharacters(raw.character, refs.characters);
+      if (characters.error) errors.push(characters.error);
+      const map = resolveOne(raw.map, refs.maps, '地图');
+      if (map.error) errors.push(map.error);
+      let condition = { item: null };
+      if (raw.condition) {
+        condition = resolveOne(raw.condition, refs.conditions, '条件');
+        if (condition.error) errors.push(condition.error);
+      }
+      return {
+        line: index + 2,
+        raw,
+        characters: characters.items || [],
+        map: map.item || null,
+        condition: condition.item || null,
+        errors,
+      };
+    }).filter(item => Object.values(item.raw).some(Boolean));
+  }
+
+  async function readSpreadsheet(file) {
+    if (!globalThis.XLSX) throw new Error('Excel 解析组件未加载，请重新加载扩展后刷新页面');
+    const workbook = globalThis.XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: false });
+    const firstName = workbook.SheetNames[0];
+    if (!firstName) throw new Error('表格中没有工作表');
+    const rows = globalThis.XLSX.utils.sheet_to_json(workbook.Sheets[firstName], { defval: '', raw: false });
+    if (!rows.length) throw new Error('第一张工作表没有可导入的数据');
+    const headers = Object.keys(rows[0]).map(normalizeKey);
+    const required = [['名称', '动作名称', 'name'], ['角色', '人物', 'character'], ['地图', 'map']];
+    if (required.some(group => !group.some(name => headers.includes(name)))) {
+      throw new Error('表头至少需要“名称、角色、地图”三列；“条件”列可以留空');
+    }
+    return rows;
+  }
+
+  function renderPreview(body, rows) {
+    const invalid = rows.filter(row => row.errors.length).length;
+    body.innerHTML = `
+      <div class="bb-bmai-summary">共 ${rows.length} 行；可创建 ${rows.length - invalid} 行；需修正 ${invalid} 行。</div>
+      <div class="bb-bmai-table-wrap"><table>
+        <thead><tr><th>行号</th><th>名称</th><th>角色匹配</th><th>地图匹配</th><th>条件匹配</th><th>状态</th></tr></thead>
+        <tbody>${rows.map(row => `
+          <tr class="${row.errors.length ? 'is-error' : ''}">
+            <td>${row.line}</td>
+            <td>${escapeHtml(row.raw.name)}</td>
+            <td>${escapeHtml(row.characters.length ? row.characters.map(item => `${item.name}（${item.id}）`).join('、') : row.raw.character)}</td>
+            <td>${escapeHtml(row.map ? `${row.map.name}（${row.map.id}）` : row.raw.map)}</td>
+            <td>${escapeHtml(row.condition ? `${row.condition.name}（${row.condition.id}）` : (row.raw.condition || '无'))}</td>
+            <td class="${row.errors.length ? 'bb-bmai-error' : 'bb-bmai-ok'}">${escapeHtml(row.errors.length ? row.errors.join('；') : '匹配成功')}</td>
+          </tr>`).join('')}</tbody>
+      </table></div>`;
+  }
+
+  async function submitRow(row, refs) {
+    const ctx = context();
+    const data = new URLSearchParams({
+      _token: refs.token,
+      cate: '61',
+      name: row.raw.name,
+      playbook_id: ctx.playbookId,
+      relate_id: ctx.relateId,
+      relate_type: ctx.relateType,
+      param_a: row.map.id,
+      description: '取消线索对角色可见',
+      error_next: '0',
+      break: '0',
+      delay: '0',
+      priority: '10',
+      pre_condition: row.condition?.id || '0',
+      _previous_: location.href,
+    });
+    row.characters.forEach((item, index) => data.set(`json_a[${index}]`, item.id));
+    data.set(`json_a[${row.characters.length}]`, '');
+    const actionUrl = new URL(refs.formAction, location.href);
+    actionUrl.searchParams.set('playbook_id', ctx.playbookId);
+    actionUrl.searchParams.set('relate_id', ctx.relateId);
+    actionUrl.searchParams.set('relate_type', ctx.relateType);
+    const response = await fetch(actionUrl.href, { method: 'POST', body: data, credentials: 'same-origin' });
+    const text = await response.text();
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if ((response.headers.get('content-type') || '').includes('application/json')) {
+      let result = null;
+      try { result = JSON.parse(text); } catch (_) { /* HTML 式成功响应 */ }
+      if (result && (result.status === false || result.success === false)) throw new Error(normalize(result.message) || '后台返回失败');
+    } else {
+      const doc = new DOMParser().parseFromString(text, 'text/html');
+      const error = normalize(doc.querySelector('.alert-danger, .callout-danger, .has-error .help-block')?.textContent);
+      if (error) throw new Error(error);
+    }
+  }
+
+  function downloadTemplate() {
+    if (!globalThis.XLSX) return;
+    const sheet = globalThis.XLSX.utils.json_to_sheet([
+      { 名称: '示例地图动作', 角色: '角色名或角色ID', 地图: '地图名或地图ID', 条件: '条件名或条件ID（可留空）' }
+    ]);
+    const book = globalThis.XLSX.utils.book_new();
+    globalThis.XLSX.utils.book_append_sheet(book, sheet, '地图动作');
+    globalThis.XLSX.writeFile(book, '批量创建地图动作模板.xlsx');
+  }
+
+  function openModal() {
+    closeModal();
+    const modal = document.createElement('div');
+    modal.id = MODAL_ID;
+    modal.innerHTML = `
+      <div class="bb-bmai-dialog" role="dialog" aria-modal="true" aria-labelledby="bb-bmai-title">
+        <div class="bb-bmai-header">
+          <h3 class="bb-bmai-title" id="bb-bmai-title">批量创建地图动作</h3>
+          <div class="bb-bmai-note">读取第一张工作表。表头使用“名称、角色、地图、条件”；条件可留空。角色、地图和条件支持名称或 ID，多个角色用逗号、顿号或分号分隔。导入只做预览，点击确认后才会创建。</div>
+          <div class="bb-bmai-tools">
+            <input type="file" class="form-control" accept=".xlsx,.xls,.csv,.tsv" data-bb-bmai-file>
+            <button type="button" class="btn btn-default" data-bb-bmai-template>下载模板</button>
+          </div>
+        </div>
+        <div class="bb-bmai-body"><div class="bb-bmai-status">请选择表格文件。</div></div>
+        <div class="bb-bmai-footer">
+          <button type="button" class="btn btn-default" data-bb-bmai-cancel>取消</button>
+          <button type="button" class="btn btn-success" data-bb-bmai-submit disabled>确认批量创建</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    const picker = modal.querySelector('[data-bb-bmai-file]');
+    const body = modal.querySelector('.bb-bmai-body');
+    const submit = modal.querySelector('[data-bb-bmai-submit]');
+    const cancel = modal.querySelector('[data-bb-bmai-cancel]');
+    let currentRows = [];
+    let refs = null;
+    cancel.addEventListener('click', closeModal);
+    modal.querySelector('[data-bb-bmai-template]').addEventListener('click', downloadTemplate);
+    modal.addEventListener('click', event => { if (event.target === modal) closeModal(); });
+    picker.addEventListener('change', async () => {
+      const file = picker.files?.[0];
+      if (!file) return;
+      submit.disabled = true;
+      body.innerHTML = '<div class="bb-bmai-status">正在读取表格并匹配本回合数据…</div>';
+      try {
+        const [sheetRows, loadedRefs] = await Promise.all([readSpreadsheet(file), loadReferences()]);
+        refs = loadedRefs;
+        currentRows = buildRows(sheetRows, refs);
+        if (!currentRows.length) throw new Error('没有识别到有效数据行');
+        renderPreview(body, currentRows);
+        submit.disabled = currentRows.some(row => row.errors.length);
+      } catch (error) {
+        body.innerHTML = `<div class="bb-bmai-status is-error">${escapeHtml(error.message || error)}</div>`;
+      }
+    });
+    submit.addEventListener('click', async () => {
+      if (!refs || !currentRows.length || currentRows.some(row => row.errors.length)) return;
+      submit.disabled = true;
+      cancel.disabled = true;
+      picker.disabled = true;
+      const lines = [];
+      let success = 0;
+      let failed = 0;
+      for (let index = 0; index < currentRows.length; index += 1) {
+        const row = currentRows[index];
+        body.innerHTML = `<div class="bb-bmai-status">正在创建 ${index + 1}/${currentRows.length}：${escapeHtml(row.raw.name)}\n${escapeHtml(lines.join('\n'))}</div>`;
+        try {
+          await submitRow(row, refs);
+          success += 1;
+          lines.push(`✓ 第 ${row.line} 行：${row.raw.name}`);
+        } catch (error) {
+          failed += 1;
+          lines.push(`✗ 第 ${row.line} 行：${row.raw.name}：${error.message || error}`);
+        }
+      }
+      body.innerHTML = `<div class="bb-bmai-status ${failed ? 'is-error' : ''}">完成：成功 ${success} 个，失败 ${failed} 个。请关闭弹窗后刷新页面查看列表。\n${escapeHtml(lines.join('\n'))}</div>`;
+      cancel.disabled = false;
+      cancel.textContent = '关闭';
+      submit.hidden = true;
+    });
+  }
+
+  function updateButton() {
+    if (!isActionList()) return;
+    addStyles();
+    if (document.querySelector(`[${BUTTON_ATTRIBUTE}]`)) return;
+    const anchor = document.querySelector('.bb-custom-action-panel')
+      || document.querySelector('table')?.previousElementSibling
+      || document.querySelector('.box-header');
+    if (!anchor) return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-success bb-batch-map-action-import-button';
+    button.setAttribute(BUTTON_ATTRIBUTE, '1');
+    button.textContent = '批量导入地图动作';
+    button.addEventListener('click', openModal);
+    anchor.appendChild(button);
+  }
+
+  function schedule() {
+    window.clearTimeout(updateTimer);
+    updateTimer = window.setTimeout(updateButton, 120);
+  }
+
+  new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
+  window.addEventListener('popstate', schedule);
+  window.setInterval(updateButton, 800);
+  updateButton();
+})();
+
 // 剧本信息轮播图批量上传：复刻后台“选择一张图片并保存”的流程，逐张累积提交。
 (() => {
   'use strict';
