@@ -2,6 +2,8 @@
   'use strict';
 
   const BUTTON_ATTRIBUTE = 'data-copy-condition-button';
+  const ID_HEADER_ATTRIBUTE = 'data-bb-condition-id-header';
+  const ID_CELL_ATTRIBUTE = 'data-bb-condition-id-cell';
   const STYLE_ID = 'copy-condition-style';
   const PENDING_COPY_HASH_KEY = 'bb-condition-copy';
   const PENDING_COPY_WINDOW_PREFIX = '__bb_condition_copy__=';
@@ -41,6 +43,37 @@
 
   function getEditUrl(row) {
     return row.querySelector('a[href*="/conditions/"][href*="/edit"]')?.href || null;
+  }
+
+  function getConditionId(row) {
+    const link = row.querySelector('a[href*="/conditions/"][href*="/edit"], a[href*="/conditions/"]:not([href*="/create"])');
+    const match = link?.href?.match(/\/conditions\/(\d+)(?:\/edit)?(?:[?#]|$)/);
+    return match?.[1] || '';
+  }
+
+  function updateIdColumns() {
+    document.querySelectorAll('table').forEach(table => {
+      const rows = Array.from(table.querySelectorAll('tbody tr')).filter(row => getConditionId(row));
+      if (!rows.length) return;
+
+      const headerRow = table.querySelector('thead tr:last-child');
+      if (headerRow && !headerRow.querySelector(`[${ID_HEADER_ATTRIBUTE}]`)) {
+        const header = document.createElement('th');
+        header.setAttribute(ID_HEADER_ATTRIBUTE, 'true');
+        header.textContent = 'ID';
+        header.style.cssText = 'width:90px;min-width:90px;';
+        headerRow.insertBefore(header, headerRow.firstElementChild);
+      }
+
+      rows.forEach(row => {
+        if (row.querySelector(`[${ID_CELL_ATTRIBUTE}]`)) return;
+        const cell = document.createElement('td');
+        cell.setAttribute(ID_CELL_ATTRIBUTE, 'true');
+        cell.textContent = getConditionId(row);
+        cell.style.cssText = 'width:90px;min-width:90px;white-space:nowrap;';
+        row.insertBefore(cell, row.firstElementChild);
+      });
+    });
   }
 
   function normalizeText(value) {
@@ -376,6 +409,7 @@
 
   function updateButtons() {
     addStyles();
+    updateIdColumns();
     document.querySelectorAll('table tbody tr').forEach(row => {
       const editLink = row.querySelector('a[href*="/conditions/"][href*="/edit"]');
       if (!editLink || row.querySelector(`a[${BUTTON_ATTRIBUTE}]`)) return;
