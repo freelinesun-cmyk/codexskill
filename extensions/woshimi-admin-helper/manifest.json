@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "我是谜后台辅助工具",
+  "version": "2.5.8",
+  "description": "为我是谜后台添加投票辅助、批量配置、精确打包时间与表格序号。",
+  "permissions": [
+    "storage"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://admin.xiyacs.com/drama*",
+        "https://admin.xiyacs.com/modules/drama/character*",
+        "https://admin.xiyacs.com/modules/drama/character_story*",
+        "https://admin.xiyacs.com/modules/drama/vote_pack*",
+        "https://admin.xiyacs.com/modules/drama/drama_vote*",
+        "https://admin.xiyacs.com/modules/drama/vote_option*",
+        "https://admin.xiyacs.com/modules/drama/action*",
+        "https://admin.xiyacs.com/modules/drama/condition*",
+        "https://admin.xiyacs.com/modules/drama/event*",
+        "https://admin.xiyacs.com/modules/drama/attr_info*",
+        "https://admin.xiyacs.com/modules/drama/scene*",
+        "https://admin.xiyacs.com/modules/drama/clue*",
+        "https://admin.xiyacs.com/modules/drama/clue_package*",
+        "https://admin.xiyacs.com/modules/drama/place*",
+        "https://admin.xiyacs.com/modules/drama/build*"
+      ],
+      "js": ["content.js", "clue.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
+}

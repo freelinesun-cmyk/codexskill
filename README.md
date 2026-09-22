@@ -1,7 +1,11 @@
-# Personal Codex skills
+# Personal Codex skills and extensions
 
 This repository backs up reusable Codex skills for Chinese murder-mystery
 production, especially workflows for 百变大侦探 and 我是谜.
+
+## Browser extensions
+
+- [`woshimi-admin-helper`](extensions/woshimi-admin-helper/): 我是谜后台辅助工具。源码、安装包与逐版本更新记录统一保存在该目录。
 
 ## Skill catalog
 
