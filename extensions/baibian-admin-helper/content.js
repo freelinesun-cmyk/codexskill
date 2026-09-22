@@ -443,6 +443,111 @@
   updateButtons();
 })();
 
+// 回合事件编辑：为“触发动作”多选框增加全选、反选和清空。
+(() => {
+  'use strict';
+
+  const TOOLBAR_ATTRIBUTE = 'data-bb-event-action-toolbar';
+  const STYLE_ID = 'bb-event-action-toolbar-style';
+  let updateTimer = null;
+
+  function isSceneEventPage() {
+    return /\/playbook\/sceneevents(?:\/\d+\/edit)?\/?$/.test(location.pathname);
+  }
+
+  function addStyles() {
+    if (document.getElementById(STYLE_ID)) return;
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = `
+      [${TOOLBAR_ATTRIBUTE}] {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 8px;
+        flex-wrap: wrap;
+      }
+      [${TOOLBAR_ATTRIBUTE}] .bb-event-action-count {
+        color: #777;
+        margin-left: 4px;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function refreshSelect(select) {
+    select.dispatchEvent(new Event('input', { bubbles: true }));
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    try {
+      if (window.jQuery) window.jQuery(select).trigger('change');
+    } catch (_) { /* 原生 change 已触发 */ }
+  }
+
+  function selectableOptions(select) {
+    return Array.from(select.options).filter(option => option.value && !option.disabled);
+  }
+
+  function updateCount(toolbar, select) {
+    const options = selectableOptions(select);
+    const selected = options.filter(option => option.selected).length;
+    const count = toolbar.querySelector('.bb-event-action-count');
+    if (count) count.textContent = `已选 ${selected} / ${options.length} 个动作`;
+  }
+
+  function applySelection(select, mode) {
+    selectableOptions(select).forEach(option => {
+      if (mode === 'all') option.selected = true;
+      else if (mode === 'none') option.selected = false;
+      else if (mode === 'invert') option.selected = !option.selected;
+    });
+    refreshSelect(select);
+  }
+
+  function createButton(label, className, handler) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `btn btn-sm ${className}`;
+    button.textContent = label;
+    button.addEventListener('click', handler);
+    return button;
+  }
+
+  function installToolbar(select) {
+    const group = select.closest('.form-group') || select.parentElement;
+    if (!group || group.querySelector(`[${TOOLBAR_ATTRIBUTE}]`)) return;
+
+    const toolbar = document.createElement('div');
+    toolbar.setAttribute(TOOLBAR_ATTRIBUTE, 'true');
+    toolbar.append(
+      createButton('全选动作', 'btn-success', () => applySelection(select, 'all')),
+      createButton('反选', 'btn-info', () => applySelection(select, 'invert')),
+      createButton('清空动作', 'btn-default', () => applySelection(select, 'none')),
+    );
+    const count = document.createElement('span');
+    count.className = 'bb-event-action-count';
+    toolbar.appendChild(count);
+
+    const select2 = group.querySelector('.select2-container');
+    (select2 || select).insertAdjacentElement('afterend', toolbar);
+    select.addEventListener('change', () => updateCount(toolbar, select));
+    updateCount(toolbar, select);
+  }
+
+  function update() {
+    if (!isSceneEventPage()) return;
+    addStyles();
+    document.querySelectorAll('select[name="trigger_action[]"][multiple]').forEach(installToolbar);
+  }
+
+  function schedule() {
+    window.clearTimeout(updateTimer);
+    updateTimer = window.setTimeout(update, 120);
+  }
+
+  new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
+  update();
+})();
+
 // 回合动作列表：从 Excel/CSV 批量创建“强制角色进入地图”动作。
 (() => {
   'use strict';
