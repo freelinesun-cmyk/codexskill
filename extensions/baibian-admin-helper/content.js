@@ -10224,7 +10224,7 @@
   attachEditorInputs();
 })();
 
-// 地图批量上传：用户明确确认后，按“图片文件名 = 地图名称”逐张创建静态地图。
+// 地图批量上传：按文件名配对静态图片与可选动态视频，用户确认后逐张创建地图。
 (() => {
   'use strict';
 
@@ -10242,8 +10242,75 @@
     ) || null;
   }
 
-  function mapTitleFromFile(file) {
-    return file.name.replace(/\.[^.]+$/, '').trim() || file.name;
+  const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'avif']);
+  const VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'm4v', 'webm']);
+
+  function fileExtension(file) {
+    const match = String(file?.name || '').match(/\.([^.]+)$/);
+    return match ? match[1].toLowerCase() : '';
+  }
+
+  function fileKind(file) {
+    const type = String(file?.type || '').toLowerCase();
+    const extension = fileExtension(file);
+    if (type.startsWith('image/') || IMAGE_EXTENSIONS.has(extension)) return 'image';
+    if (type.startsWith('video/') || VIDEO_EXTENSIONS.has(extension)) return 'video';
+    return 'unsupported';
+  }
+
+  function fileBaseName(file) {
+    return String(file?.name || '').replace(/\.[^.]+$/, '').trim() || String(file?.name || '');
+  }
+
+  function pairingName(file, kind = fileKind(file)) {
+    const baseName = fileBaseName(file);
+    if (kind === 'image') return baseName.replace(/[\s_-]*静态$/u, '').trim() || baseName;
+    if (kind === 'video') return baseName.replace(/[\s_-]*动态$/u, '').trim() || baseName;
+    return baseName;
+  }
+
+  function pairingKey(file, kind = fileKind(file)) {
+    return pairingName(file, kind).normalize('NFKC').replace(/\s+/g, ' ').trim().toLocaleLowerCase('zh-CN');
+  }
+
+  function buildMapPairs(files) {
+    const groups = new Map();
+    const unsupported = [];
+    files.forEach(file => {
+      const kind = fileKind(file);
+      if (kind === 'unsupported') {
+        unsupported.push(file);
+        return;
+      }
+      const key = pairingKey(file, kind);
+      if (!groups.has(key)) groups.set(key, { key, title: pairingName(file, kind), images: [], videos: [] });
+      const group = groups.get(key);
+      if (kind === 'image') group.images.push(file);
+      else group.videos.push(file);
+    });
+    const pairs = Array.from(groups.values()).map(group => {
+      let error = '';
+      if (!group.images.length) error = '缺少同名静态图片';
+      else if (group.images.length > 1) error = '同名静态图片超过 1 张';
+      else if (group.videos.length > 1) error = '同名动态视频超过 1 个';
+      return {
+        ...group,
+        image: group.images[0] || null,
+        video: group.videos[0] || null,
+        error,
+      };
+    });
+    unsupported.forEach(file => pairs.push({
+      key: `unsupported:${file.name}`,
+      title: fileBaseName(file),
+      images: [],
+      videos: [],
+      image: null,
+      video: null,
+      error: '不支持的文件格式',
+      unsupported: file,
+    }));
+    return pairs;
   }
 
   function addStyles() {
@@ -10252,14 +10319,18 @@
     style.id = 'bb-batch-map-style';
     style.textContent = `
       #${MODAL_ID} { position: fixed; z-index: 99999; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.45); }
-      #${MODAL_ID} .bb-batch-panel { width: min(680px, calc(100vw - 36px)); max-height: calc(100vh - 48px); overflow: auto; padding: 20px; border-radius: 5px; background: #fff; box-shadow: 0 12px 32px rgba(0,0,0,.3); }
+      #${MODAL_ID} .bb-batch-panel { width: min(920px, calc(100vw - 36px)); max-height: calc(100vh - 48px); overflow: auto; padding: 20px; border-radius: 5px; background: #fff; box-shadow: 0 12px 32px rgba(0,0,0,.3); }
       #${MODAL_ID} h3 { margin: 0 0 12px; font-size: 20px; }
       #${MODAL_ID} .bb-batch-note { color: #777; line-height: 1.6; }
       #${MODAL_ID} .bb-batch-list { margin: 14px 0; max-height: 260px; overflow: auto; border: 1px solid #ddd; }
-      #${MODAL_ID} .bb-batch-row { display: flex; justify-content: space-between; gap: 16px; padding: 8px 10px; border-bottom: 1px solid #eee; }
+      #${MODAL_ID} .bb-batch-row { display: grid; grid-template-columns: minmax(130px,.8fr) minmax(190px,1.2fr) minmax(190px,1.2fr) minmax(100px,.6fr); gap: 12px; padding: 8px 10px; border-bottom: 1px solid #eee; align-items: center; }
+      #${MODAL_ID} .bb-batch-head { position: sticky; top: 0; z-index: 1; background: #f5f7f9; font-weight: 600; color: #52606d; }
       #${MODAL_ID} .bb-batch-row:last-child { border-bottom: 0; }
       #${MODAL_ID} .bb-batch-title { font-weight: 600; word-break: break-all; }
-      #${MODAL_ID} .bb-batch-file { color: #888; word-break: break-all; text-align: right; }
+      #${MODAL_ID} .bb-batch-file { color: #667; word-break: break-all; }
+      #${MODAL_ID} .bb-batch-video-empty { color: #999; }
+      #${MODAL_ID} .bb-batch-ok { color: #2e8b57; font-weight: 600; }
+      #${MODAL_ID} .bb-batch-error { color: #c0392b; font-weight: 600; }
       #${MODAL_ID} .bb-batch-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
       #${MODAL_ID} .bb-batch-status { margin-top: 12px; color: #337ab7; white-space: pre-line; }
     `;
@@ -10273,21 +10344,37 @@
   function renderFileList(container) {
     container.replaceChildren();
     if (!selectedFiles.length) {
-      container.textContent = '尚未选择图片。';
-      return;
+      container.textContent = '尚未选择图片或视频。';
+      return [];
     }
-    selectedFiles.forEach(file => {
+    const head = document.createElement('div');
+    head.className = 'bb-batch-row bb-batch-head';
+    ['地图名称', '静态图片', '动态视频（可选）', '匹配状态'].forEach(text => {
+      const cell = document.createElement('span');
+      cell.textContent = text;
+      head.appendChild(cell);
+    });
+    container.appendChild(head);
+    const pairs = buildMapPairs(selectedFiles);
+    pairs.forEach(pair => {
       const row = document.createElement('div');
       row.className = 'bb-batch-row';
       const title = document.createElement('span');
       title.className = 'bb-batch-title';
-      title.textContent = mapTitleFromFile(file);
-      const fileName = document.createElement('span');
-      fileName.className = 'bb-batch-file';
-      fileName.textContent = file.name;
-      row.append(title, fileName);
+      title.textContent = pair.title;
+      const imageName = document.createElement('span');
+      imageName.className = 'bb-batch-file';
+      imageName.textContent = pair.images.map(file => file.name).join('、') || '—';
+      const videoName = document.createElement('span');
+      videoName.className = `bb-batch-file${pair.video ? '' : ' bb-batch-video-empty'}`;
+      videoName.textContent = pair.videos.map(file => file.name).join('、') || '无（创建静态地图）';
+      const matchStatus = document.createElement('span');
+      matchStatus.className = pair.error ? 'bb-batch-error' : 'bb-batch-ok';
+      matchStatus.textContent = pair.error || (pair.video ? '图片 + 视频' : '仅静态图片');
+      row.append(title, imageName, videoName, matchStatus);
       container.appendChild(row);
     });
+    return pairs;
   }
 
   function createModal(createLink) {
@@ -10298,16 +10385,16 @@
     const panel = document.createElement('div');
     panel.className = 'bb-batch-panel';
     const heading = document.createElement('h3');
-    heading.textContent = '批量上传静态地图';
+    heading.textContent = '批量上传地图';
     const note = document.createElement('p');
     note.className = 'bb-batch-note';
-    note.textContent = '每张图片将创建一条地图：名称取文件名（去掉扩展名），描述留空，动态图不上传。请确认图片尺寸符合后台要求。';
+    note.textContent = '请选择静态图片和可选动态视频。同名文件会自动配对，例如“云祥镇.png + 云祥镇.mp4”；也兼容“云祥镇_静态.png + 云祥镇_动态.mp4”。静态图片必需，描述留空。';
     const picker = document.createElement('input');
     picker.type = 'file';
-    picker.accept = 'image/*';
+    picker.accept = 'image/*,video/*,.jpg,.jpeg,.png,.webp,.gif,.bmp,.avif,.mp4,.mov,.m4v,.webm';
     picker.multiple = true;
     picker.className = 'form-control';
-    window.__bbMapFolderApi?.enhanceFileInput(picker, { accept: 'image/*', multiple: true });
+    window.__bbMapFolderApi?.enhanceFileInput(picker, { accept: picker.accept, multiple: true });
     const list = document.createElement('div');
     list.className = 'bb-batch-list';
     renderFileList(list);
@@ -10324,10 +10411,17 @@
     confirm.className = 'btn btn-danger';
     confirm.textContent = '确认创建 0 张地图';
     picker.addEventListener('change', () => {
-      selectedFiles = Array.from(picker.files || []).filter(file => file.type.startsWith('image/'));
-      renderFileList(list);
-      confirm.textContent = `确认创建 ${selectedFiles.length} 张地图`;
-      status.textContent = selectedFiles.length ? '' : '请选择至少一张图片。';
+      selectedFiles = Array.from(picker.files || []);
+      const pairs = renderFileList(list);
+      const validPairs = pairs.filter(pair => !pair.error);
+      const invalidPairs = pairs.filter(pair => pair.error);
+      confirm.textContent = `确认创建 ${validPairs.length} 张地图`;
+      confirm.disabled = !validPairs.length || invalidPairs.length > 0;
+      status.textContent = !selectedFiles.length
+        ? '请选择至少一张静态图片。'
+        : invalidPairs.length
+          ? `有 ${invalidPairs.length} 组文件无法安全匹配，请调整文件名或移除冲突文件后重新选择。`
+          : `匹配完成：${validPairs.length} 张地图，其中 ${validPairs.filter(pair => pair.video).length} 张包含动态视频。`;
     });
     cancel.addEventListener('click', removeModal);
     confirm.addEventListener('click', async () => {
@@ -10336,8 +10430,10 @@
         else removeModal();
         return;
       }
-      if (!selectedFiles.length) {
-        status.textContent = '请选择至少一张图片。';
+      const pairs = buildMapPairs(selectedFiles);
+      const invalidPairs = pairs.filter(pair => pair.error);
+      if (!pairs.length || invalidPairs.length) {
+        status.textContent = invalidPairs.length ? '仍有无法安全匹配的文件，不能提交。' : '请选择至少一张静态图片。';
         return;
       }
       // 此处是实际新增动作，只由用户点击“确认创建”触发。
@@ -10350,20 +10446,21 @@
         const createResponse = await fetch(createLink.href, { credentials: 'same-origin' });
         if (!createResponse.ok) throw new Error(`读取创建页面失败：HTTP ${createResponse.status}`);
         const createDoc = new DOMParser().parseFromString(await createResponse.text(), 'text/html');
-        const form = Array.from(createDoc.forms).find(item => item.method.toLowerCase() === 'post' && item.querySelector('[name="image"]'));
+        const form = Array.from(createDoc.forms).find(item => item.method.toLowerCase() === 'post' && item.querySelector('[name="image"]') && item.querySelector('[name="video"]'));
         if (!form) throw new Error('未找到后台地图创建表单');
         const action = form.action;
         const token = form.querySelector('[name="_token"]')?.value;
         const playbookId = form.querySelector('[name="playbook_id"]')?.value;
         if (!token || !playbookId) throw new Error('未读取到后台创建凭据');
 
-        for (const file of selectedFiles) {
-          status.textContent = `正在创建 ${completed + 1}/${selectedFiles.length}：${file.name}`;
+        for (const pair of pairs) {
+          status.textContent = `正在创建 ${completed + 1}/${pairs.length}：${pair.title}${pair.video ? '（含动态视频）' : ''}`;
           const data = new FormData();
           data.append('playbook_id', playbookId);
-          data.append('title', mapTitleFromFile(file));
+          data.append('title', pair.title);
           data.append('brief', '');
-          data.append('image', file, file.name);
+          data.append('image', pair.image, pair.image.name);
+          if (pair.video) data.append('video', pair.video, pair.video.name);
           data.append('video_play_once', 'off');
           data.append('is_pin', 'off');
           data.append('sync_play_video_sound', 'off');
@@ -10374,13 +10471,13 @@
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             completed += 1;
           } catch (error) {
-            failures.push(`${file.name}：${error.message || '创建失败'}`);
+            failures.push(`${pair.title}：${error.message || '创建失败'}`);
           }
         }
       } catch (error) {
         failures.push(error.message || '批量创建初始化失败');
       }
-      status.textContent = `已创建 ${completed}/${selectedFiles.length} 张地图。${failures.length ? `\n失败：${failures.join('\n')}` : ''}`;
+      status.textContent = `已创建 ${completed}/${pairs.length} 张地图。${failures.length ? `\n失败：${failures.join('\n')}` : ''}`;
       confirm.textContent = failures.length ? '关闭' : '完成并刷新列表';
       confirm.disabled = false;
       confirm.dataset.finished = 'true';
