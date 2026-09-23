@@ -2148,9 +2148,15 @@
       #${MODAL_ID} .batch-clue-image-row { display: grid; grid-template-columns: 42px 68px minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 10px; min-height: 70px; padding: 8px 10px; border-bottom: 1px solid #eee; }
       #${MODAL_ID} .batch-clue-image-row:last-child { border-bottom: 0; }
       #${MODAL_ID} .batch-clue-image-thumb { width: 56px; height: 56px; object-fit: cover; border-radius: 4px; background: #f5f5f5; }
+      #${MODAL_ID} .batch-clue-image-thumb[data-preview-url] { cursor: zoom-in; box-shadow: 0 0 0 1px rgba(0,0,0,.08); transition: transform .15s ease, box-shadow .15s ease; }
+      #${MODAL_ID} .batch-clue-image-thumb[data-preview-url]:hover { transform: scale(1.06); box-shadow: 0 2px 10px rgba(0,0,0,.22); }
       #${MODAL_ID} .batch-clue-image-muted { color: #999; }
       #${MODAL_ID} .batch-clue-image-status { margin-top: 10px; color: #337ab7; white-space: pre-line; line-height: 1.6; }
       #${MODAL_ID} .batch-clue-image-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+      #${MODAL_ID} .batch-clue-image-lightbox { position: fixed; z-index: 2147483647; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 28px; background: rgba(0,0,0,.88); }
+      #${MODAL_ID} .batch-clue-image-lightbox img { display: block; max-width: calc(100vw - 72px); max-height: calc(100vh - 110px); object-fit: contain; border-radius: 4px; background: #fff; box-shadow: 0 8px 30px rgba(0,0,0,.45); }
+      #${MODAL_ID} .batch-clue-image-lightbox-caption { max-width: calc(100vw - 120px); overflow: hidden; color: #fff; text-overflow: ellipsis; white-space: nowrap; }
+      #${MODAL_ID} .batch-clue-image-lightbox-close { position: absolute; top: 16px; right: 20px; width: 42px; height: 42px; border: 0; border-radius: 50%; color: #fff; background: rgba(255,255,255,.18); font-size: 28px; line-height: 40px; cursor: pointer; }
       #${MODAL_ID}.batch-clue-image-picker-open { justify-content: flex-end; padding: 12px; }
       #${MODAL_ID}.batch-clue-image-picker-open .batch-clue-image-panel { width: min(420px, calc(100vw - 24px)); max-height: calc(100vh - 24px); }
       #${MODAL_ID}.batch-clue-image-picker-open .batch-clue-image-row { grid-template-columns: 32px minmax(0, 1fr); min-height: 46px; }
@@ -2166,6 +2172,37 @@
     if (!modal) return;
     modal.querySelectorAll('[data-preview-url]').forEach(image => URL.revokeObjectURL(image.src));
     modal.remove();
+  }
+
+  function openImagePreview(src, fileName) {
+    const modal = document.getElementById(MODAL_ID);
+    if (!modal || !src) return;
+    modal.querySelector('.batch-clue-image-lightbox')?.remove();
+    const viewer = document.createElement('div');
+    viewer.className = 'batch-clue-image-lightbox';
+    viewer.tabIndex = -1;
+    const image = document.createElement('img');
+    image.src = src;
+    image.alt = fileName || '线索图片预览';
+    const caption = document.createElement('div');
+    caption.className = 'batch-clue-image-lightbox-caption';
+    caption.textContent = fileName || '';
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'batch-clue-image-lightbox-close';
+    close.setAttribute('aria-label', '关闭图片预览');
+    close.textContent = '×';
+    const closeViewer = () => viewer.remove();
+    close.addEventListener('click', closeViewer);
+    viewer.addEventListener('click', event => {
+      if (event.target === viewer) closeViewer();
+    });
+    viewer.addEventListener('keydown', event => {
+      if (event.key === 'Escape') closeViewer();
+    });
+    viewer.append(image, caption, close);
+    modal.appendChild(viewer);
+    viewer.focus();
   }
 
   async function uploadClueImage(file) {
@@ -2284,6 +2321,8 @@
           thumb.src = URL.createObjectURL(file);
           thumb.alt = file.name;
           thumb.setAttribute('data-preview-url', 'true');
+          thumb.title = '点击查看完整图片';
+          thumb.addEventListener('click', () => openImagePreview(thumb.src, file.name));
         } else {
           thumb.alt = '暂无图片';
         }

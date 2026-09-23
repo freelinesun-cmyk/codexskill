@@ -3,6 +3,17 @@
 本文件记录“我是谜后台辅助工具”的公开版本变化。后续每次发布都应先更新
 `manifest.json` 版本号和本文件，再提交源码、安装包并创建同名 Git 标签。
 
+## [2.5.10] - 2026-09-23
+
+### 新增
+
+- 批量添加线索图片时，可点击列表中的缩略图打开单张完整图片预览。
+
+### 交互
+
+- 大图按原始比例完整显示；支持点击遮罩空白处、右上角关闭按钮或按 Esc 返回匹配列表。
+- 保留原有图片匹配顺序与批量上传流程，预览操作不会触发上传。
+
 ## [2.5.9] - 2026-09-23
 
 ### 新增
@@ -35,6 +46,7 @@
 
 - 将线索列表分页逻辑拆分到独立的 `clue.js`，减少与其他页面功能的耦合。
 
+[2.5.10]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.10/extensions/woshimi-admin-helper
 [2.5.9]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.9/extensions/woshimi-admin-helper
 [2.5.8]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.8/extensions/woshimi-admin-helper
 [2.5.7]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.7/extensions/woshimi-admin-helper
