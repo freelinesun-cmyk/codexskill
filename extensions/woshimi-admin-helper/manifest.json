@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "我是谜后台辅助工具",
-  "version": "2.5.8",
+  "version": "2.5.9",
   "description": "为我是谜后台添加投票辅助、批量配置、精确打包时间与表格序号。",
   "permissions": [
     "storage"

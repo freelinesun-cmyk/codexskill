@@ -2372,6 +2372,244 @@
   addBatchImageButton();
 })();
 
+// 线索列表批量修改调查点：只处理勾选线索，完整保留原配置并仅替换 packId。
+(() => {
+  'use strict';
+
+  const BUTTON_ATTRIBUTE = 'data-batch-clue-pack-button';
+  const MODAL_ID = 'batch-clue-pack-modal';
+
+  function isClueListPage() {
+    return /\/modules\/drama\/clue\/?$/.test(window.location.pathname);
+  }
+
+  function getToolbarButton(text) {
+    const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+    return Array.from(document.querySelectorAll('#toolbar a.btn, #toolbar button.btn, a.btn, button.btn')).find(element =>
+      element.textContent.replace(/\s+/g, ' ').trim() === normalized
+    ) || null;
+  }
+
+  function getClueTable() {
+    return document.querySelector('#bootstrap-table') || document.querySelector('.bootstrap-table table');
+  }
+
+  function getSelectedClues() {
+    const table = getClueTable();
+    if (!table) return [];
+    const headers = Array.from(table.querySelectorAll('thead tr th')).map(header => header.textContent.trim());
+    const idIndex = headers.indexOf('ID');
+    const nameIndex = headers.indexOf('名称');
+    if (idIndex < 0 || nameIndex < 0) return [];
+    return Array.from(table.querySelectorAll('tbody > tr')).filter(row => {
+      const checkbox = row.querySelector('input[type="checkbox"]');
+      return Boolean(checkbox?.checked || row.classList.contains('selected'));
+    }).map(row => {
+      const id = row.cells[idIndex]?.textContent.replace(/\s+/g, '').trim();
+      const name = row.cells[nameIndex]?.textContent.replace(/\s+/g, ' ').trim();
+      return /^\d+$/.test(id || '') ? { id, name: name || `线索 ${id}`, row } : null;
+    }).filter(Boolean);
+  }
+
+  function addStyles() {
+    if (document.getElementById('batch-clue-pack-style')) return;
+    const style = document.createElement('style');
+    style.id = 'batch-clue-pack-style';
+    style.textContent = `
+      #${MODAL_ID} { position: fixed; z-index: 2147483647; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.45); }
+      #${MODAL_ID} .batch-clue-pack-panel { width: min(620px, calc(100vw - 36px)); padding: 22px; border-radius: 5px; background: #fff; box-shadow: 0 12px 32px rgba(0,0,0,.3); }
+      #${MODAL_ID} h3 { margin: 0 0 12px; font-size: 20px; }
+      #${MODAL_ID} p { margin: 0 0 14px; color: #666; line-height: 1.7; }
+      #${MODAL_ID} label { display: block; margin-bottom: 7px; font-weight: 600; }
+      #${MODAL_ID} select { width: 100%; height: 40px; padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
+      #${MODAL_ID} .batch-clue-pack-status { margin-top: 12px; color: #337ab7; white-space: pre-line; line-height: 1.6; }
+      #${MODAL_ID} .batch-clue-pack-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function closeModal() {
+    document.getElementById(MODAL_ID)?.remove();
+  }
+
+  async function loadClueForm(clueId) {
+    const query = new URLSearchParams(window.location.search);
+    const response = await fetch(`/modules/drama/clue/edit/${encodeURIComponent(clueId)}?${query.toString()}`, {
+      credentials: 'same-origin',
+      cache: 'no-store',
+    });
+    if (!response.ok) throw new Error(`读取线索失败：HTTP ${response.status}`);
+    const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+    const form = doc.querySelector('#form-clue-edit, form');
+    if (!form) throw new Error('未找到线索编辑表单');
+    return { form, query };
+  }
+
+  function serializeClueForm(form, clueId, query) {
+    const fields = new URLSearchParams();
+    Array.from(form.elements).forEach(element => {
+      if (!element.name || element.disabled || element.type === 'file') return;
+      if ((element.type === 'checkbox' || element.type === 'radio') && !element.checked) return;
+      if (element.tagName === 'SELECT' && element.multiple) {
+        Array.from(element.selectedOptions).forEach(option => fields.append(element.name, option.value));
+      } else {
+        fields.append(element.name, element.value || '');
+      }
+    });
+    fields.set('id', String(clueId));
+    const playbookId = query.get('playbookId');
+    if (playbookId) fields.set('playbookId', playbookId);
+    return fields;
+  }
+
+  async function loadInvestigationPoints(clueId) {
+    const { form } = await loadClueForm(clueId);
+    const select = form.querySelector('select[name="packId"]');
+    if (!select) throw new Error('未找到调查点选择框');
+    return Array.from(select.options)
+      .map(option => ({ value: option.value, text: option.textContent.replace(/\s+/g, ' ').trim() }))
+      .filter(option => /^\d+$/.test(option.value) && Number(option.value) > 0);
+  }
+
+  async function saveCluePack(clueId, packId) {
+    const { form, query } = await loadClueForm(clueId);
+    const fields = serializeClueForm(form, clueId, query);
+    fields.set('packId', String(packId));
+    const response = await fetch('/modules/drama/clue/edit', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+      body: fields.toString(),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || Number(payload.code) !== 0) throw new Error(payload.msg || `保存失败：HTTP ${response.status}`);
+  }
+
+  function clearTargetSelection(target) {
+    const checkbox = target.row?.querySelector('input[type="checkbox"]');
+    if (checkbox) {
+      checkbox.checked = false;
+      checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    target.row?.classList.remove('selected');
+  }
+
+  async function openModal() {
+    const targets = getSelectedClues();
+    if (!targets.length) {
+      window.alert('请先在线索列表中勾选至少一条线索。');
+      return;
+    }
+    closeModal();
+    addStyles();
+    const modal = document.createElement('div');
+    modal.id = MODAL_ID;
+    const panel = document.createElement('div');
+    panel.className = 'batch-clue-pack-panel';
+    const heading = document.createElement('h3');
+    heading.textContent = '批量修改线索的调查点';
+    const note = document.createElement('p');
+    note.textContent = `已选择 ${targets.length} 条线索。提交后只修改调查点，名称、描述、主图、技能包及其他配置保持不变。`;
+    const label = document.createElement('label');
+    label.textContent = '新的调查点';
+    const select = document.createElement('select');
+    select.disabled = true;
+    select.appendChild(new Option('正在读取调查点……', ''));
+    const status = document.createElement('div');
+    status.className = 'batch-clue-pack-status';
+    status.textContent = '正在读取当前剧本的调查点……';
+    const actions = document.createElement('div');
+    actions.className = 'batch-clue-pack-actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn btn-default';
+    cancel.textContent = '取消';
+    const confirm = document.createElement('button');
+    confirm.type = 'button';
+    confirm.className = 'btn btn-danger';
+    confirm.textContent = `确认修改 ${targets.length} 条线索`;
+    confirm.disabled = true;
+
+    cancel.addEventListener('click', closeModal);
+    select.addEventListener('change', () => {
+      confirm.disabled = !select.value;
+    });
+    confirm.addEventListener('click', async () => {
+      if (confirm.dataset.finished === 'true') {
+        if (confirm.dataset.completed !== '0') window.location.reload();
+        else closeModal();
+        return;
+      }
+      if (!select.value) return;
+      const selectedText = select.selectedOptions[0]?.textContent.trim() || '所选调查点';
+      confirm.disabled = true;
+      cancel.disabled = true;
+      select.disabled = true;
+      let completed = 0;
+      const failures = [];
+      for (let index = 0; index < targets.length; index += 1) {
+        const target = targets[index];
+        status.textContent = `正在保存 ${index + 1}/${targets.length}：${target.name} → ${selectedText}`;
+        try {
+          await saveCluePack(target.id, select.value);
+          completed += 1;
+          clearTargetSelection(target);
+        } catch (error) {
+          failures.push(`${target.name}（ID：${target.id}）：${error.message || '保存失败'}`);
+        }
+      }
+      status.textContent = `已修改 ${completed}/${targets.length} 条线索的调查点。${failures.length ? `\n失败：${failures.join('\n')}` : ''}`;
+      confirm.textContent = failures.length ? '关闭' : '完成并刷新列表';
+      confirm.disabled = false;
+      confirm.dataset.finished = 'true';
+      confirm.dataset.completed = String(completed);
+      cancel.style.display = 'none';
+    });
+
+    actions.append(cancel, confirm);
+    panel.append(heading, note, label, select, status, actions);
+    modal.appendChild(panel);
+    modal.addEventListener('click', event => { if (event.target === modal && !confirm.disabled) closeModal(); });
+    document.body.appendChild(modal);
+
+    try {
+      const points = await loadInvestigationPoints(targets[0].id);
+      if (!points.length) throw new Error('当前剧本没有可用调查点');
+      select.replaceChildren(new Option('请选择调查点', ''));
+      points.forEach(point => select.appendChild(new Option(point.text, point.value)));
+      select.disabled = false;
+      status.textContent = `已读取 ${points.length} 个调查点，请选择后提交。`;
+    } catch (error) {
+      select.replaceChildren(new Option('调查点读取失败', ''));
+      status.textContent = `读取失败：${error.message || '未知错误'}`;
+      confirm.disabled = true;
+    }
+  }
+
+  function addBatchPackButton() {
+    if (!isClueListPage() || document.querySelector(`[${BUTTON_ATTRIBUTE}]`)) return;
+    const addButton = getToolbarButton('添加');
+    if (!addButton) return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-warning';
+    button.setAttribute(BUTTON_ATTRIBUTE, 'true');
+    button.style.marginLeft = '8px';
+    button.textContent = '批量修改线索的调查点';
+    button.title = '勾选线索后统一修改调查点';
+    button.addEventListener('click', openModal);
+    const anchor = getToolbarButton('批量添加线索图片') || getToolbarButton('填充线索图片') || getToolbarButton('批量添加') || addButton;
+    anchor.insertAdjacentElement('afterend', button);
+  }
+
+  const observer = new MutationObserver(addBatchPackButton);
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+  addBatchPackButton();
+})();
+
 // 角色故事快捷创建：复用后台创建页面，预填同标题和下一个角色，不自动提交。
 (() => {
   'use strict';

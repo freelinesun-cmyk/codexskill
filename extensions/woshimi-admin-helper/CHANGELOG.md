@@ -3,6 +3,17 @@
 本文件记录“我是谜后台辅助工具”的公开版本变化。后续每次发布都应先更新
 `manifest.json` 版本号和本文件，再提交源码、安装包并创建同名 Git 标签。
 
+## [2.5.9] - 2026-09-23
+
+### 新增
+
+- 线索列表新增“批量修改线索的调查点”按钮；勾选线索后可统一选择新的调查点并逐条保存。
+
+### 安全性
+
+- 批量修改时先读取每条线索的完整编辑配置，仅替换调查点字段，保留名称、描述、主图、技能包及其他配置。
+- 保存成功的线索自动取消勾选；失败项继续保留勾选并显示具体失败原因，便于重新处理。
+
 ## [2.5.8] - 2026-09-22
 
 ### 新增
@@ -24,5 +35,6 @@
 
 - 将线索列表分页逻辑拆分到独立的 `clue.js`，减少与其他页面功能的耦合。
 
+[2.5.9]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.9/extensions/woshimi-admin-helper
 [2.5.8]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.8/extensions/woshimi-admin-helper
 [2.5.7]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.7/extensions/woshimi-admin-helper
