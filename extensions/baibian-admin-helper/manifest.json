@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "百变大侦探后台辅助工具",
-  "version": "2.45.2",
+  "version": "2.46.0",
   "description": "复制后台条件、批量导入及预览角色故事、批量创建后台数据，并在地点列表显示地图及坐标信息。",
   "permissions": ["storage"],
   "content_scripts": [

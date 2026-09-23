@@ -7927,6 +7927,235 @@
   update();
 })();
 
+// 技能列表批量创建技能：每行一个名称，统一选择技能类型，其余字段沿用后台默认值。
+(() => {
+  'use strict';
+
+  const BUTTON_ATTRIBUTE = 'data-bb-skill-batch-create';
+  const MODAL_ID = 'bb-skill-batch-create-modal';
+  const STYLE_ID = 'bb-skill-batch-create-style';
+  let updateTimer = null;
+
+  const normalize = value => String(value ?? '').replace(/\s+/g, ' ').trim();
+  const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[char]);
+  const isSkillList = () => /\/playbook\/skills\/?$/.test(location.pathname);
+
+  function getCreateUrl() {
+    const link = Array.from(document.querySelectorAll('a[href*="/playbook/skills/create"]'))
+      .find(item => /添加技能/.test(item.textContent));
+    if (!link) throw new Error('未找到“添加技能”入口');
+    return link.href;
+  }
+
+  function addStyles() {
+    if (document.getElementById(STYLE_ID)) return;
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = `
+      #${MODAL_ID} { position: fixed; z-index: 10000; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.4); }
+      #${MODAL_ID} .bb-skill-create-dialog { width: min(760px, calc(100vw - 40px)); max-height: calc(100vh - 60px); overflow: auto; padding: 22px; border-radius: 6px; background: #fff; box-shadow: 0 10px 36px rgba(0,0,0,.28); }
+      #${MODAL_ID} h3 { margin: 0 0 8px; }
+      #${MODAL_ID} .bb-skill-create-hint { color: #687786; margin-bottom: 14px; }
+      #${MODAL_ID} label { display: block; margin: 12px 0 6px; font-weight: 600; }
+      #${MODAL_ID} textarea { width: 100%; min-height: 220px; resize: vertical; box-sizing: border-box; padding: 10px; border: 1px solid #ccd6df; border-radius: 4px; }
+      #${MODAL_ID} select { width: 100%; min-height: 36px; padding: 6px 8px; border: 1px solid #ccd6df; border-radius: 4px; }
+      #${MODAL_ID} .bb-skill-create-preview { margin-top: 12px; max-height: 180px; overflow: auto; border: 1px solid #e1e6eb; }
+      #${MODAL_ID} table { width: 100%; border-collapse: collapse; }
+      #${MODAL_ID} th, #${MODAL_ID} td { padding: 7px 9px; border-bottom: 1px solid #e8edf1; text-align: left; }
+      #${MODAL_ID} th { position: sticky; top: 0; background: #f5f8fa; }
+      #${MODAL_ID} .bb-skill-create-status { min-height: 24px; margin-top: 12px; color: #587080; white-space: pre-wrap; }
+      #${MODAL_ID} .bb-skill-create-status.error { color: #c0392b; }
+      #${MODAL_ID} .bb-skill-create-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function closeModal() {
+    document.getElementById(MODAL_ID)?.remove();
+  }
+
+  function getCreateForm(doc) {
+    return Array.from(doc.forms).find(form => form.method.toLowerCase() === 'post'
+      && form.querySelector('[name="name"]')
+      && form.querySelector('select[name="cate"]')) || null;
+  }
+
+  async function loadCreateForm(createUrl) {
+    const response = await fetch(createUrl, { credentials: 'same-origin' });
+    if (!response.ok) throw new Error(`读取技能创建表单失败：HTTP ${response.status}`);
+    const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+    const form = getCreateForm(doc);
+    if (!form) throw new Error('未找到技能创建表单');
+    return { form, doc, responseUrl: response.url || createUrl };
+  }
+
+  function typeOptions(form) {
+    return Array.from(form.querySelector('select[name="cate"]')?.options || [])
+      .filter(option => option.value !== '')
+      .map(option => ({ value: option.value, label: normalize(option.textContent), selected: option.selected }));
+  }
+
+  async function checkResponse(response) {
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const payload = await response.json();
+      if (payload.status === false) throw new Error(payload.message || '后台返回创建失败');
+      return;
+    }
+    const text = await response.text();
+    const doc = new DOMParser().parseFromString(text, 'text/html');
+    const errorText = normalize(Array.from(doc.querySelectorAll('.alert-danger, .callout-danger, .has-error .help-block'))
+      .map(item => item.textContent).join(' '));
+    if (errorText) throw new Error(errorText);
+    if (/\/playbook\/skills\/create\/?$/.test(new URL(response.url).pathname)) {
+      throw new Error('后台未接受创建请求');
+    }
+  }
+
+  async function createOne(createUrl, name, cate) {
+    const { form, responseUrl } = await loadCreateForm(createUrl);
+    const nameInput = form.querySelector('[name="name"]');
+    const cateSelect = form.querySelector('select[name="cate"]');
+    if (!Array.from(cateSelect.options).some(option => option.value === cate)) throw new Error('所选技能类型不存在');
+    nameInput.value = name;
+    cateSelect.value = cate;
+
+    const data = new FormData(form);
+    data.delete('name');
+    data.append('name', name);
+    data.delete('cate');
+    data.append('cate', cate);
+    data.delete('icon');
+    const playbookId = new URL(createUrl).searchParams.get('playbook_id') || '';
+    if (playbookId) data.set('playbook_id', playbookId);
+
+    const action = new URL(form.getAttribute('action') || responseUrl, responseUrl).href;
+    const response = await fetch(action, { method: 'POST', body: data, credentials: 'same-origin' });
+    await checkResponse(response);
+  }
+
+  function parseNames(value) {
+    return String(value || '').split(/\r?\n/).map(normalize).filter(Boolean);
+  }
+
+  function renderPreview(modal, names) {
+    const tbody = modal.querySelector('tbody');
+    tbody.innerHTML = names.map((name, index) => `<tr data-row="${index}"><td>${index + 1}</td><td>${escapeHtml(name)}</td><td>待创建</td></tr>`).join('');
+    modal.querySelector('[data-bb-skill-create-count]').textContent = `共 ${names.length} 个技能`;
+  }
+
+  async function openModal() {
+    closeModal();
+    addStyles();
+    const createUrl = getCreateUrl();
+    const { form } = await loadCreateForm(createUrl);
+    const options = typeOptions(form);
+    if (!options.length) throw new Error('未读取到技能类型');
+
+    const modal = document.createElement('div');
+    modal.id = MODAL_ID;
+    modal.innerHTML = `
+      <div class="bb-skill-create-dialog">
+        <h3>批量创建技能</h3>
+        <div class="bb-skill-create-hint">每行输入一个技能名称，统一选择技能类型；其他字段沿用后台创建表单默认值。</div>
+        <label>技能类型</label>
+        <select data-bb-skill-create-type>${options.map(option => `<option value="${escapeHtml(option.value)}"${option.selected ? ' selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select>
+        <label>技能名称（每行一个）</label>
+        <textarea data-bb-skill-create-names placeholder="例如：&#10;查看秦深的1号线索&#10;查看秦深的2号线索"></textarea>
+        <div class="bb-skill-create-preview"><table><thead><tr><th>行号</th><th>技能名称</th><th>状态</th></tr></thead><tbody></tbody></table></div>
+        <div class="bb-skill-create-status" data-bb-skill-create-status><span data-bb-skill-create-count>共 0 个技能</span></div>
+        <div class="bb-skill-create-actions">
+          <button type="button" class="btn btn-default" data-bb-skill-create-cancel>取消</button>
+          <button type="button" class="btn btn-primary" data-bb-skill-create-confirm disabled>确认创建</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+
+    const textarea = modal.querySelector('[data-bb-skill-create-names]');
+    const confirm = modal.querySelector('[data-bb-skill-create-confirm]');
+    const cancel = modal.querySelector('[data-bb-skill-create-cancel]');
+    const status = modal.querySelector('[data-bb-skill-create-status]');
+    const refresh = () => {
+      const names = parseNames(textarea.value);
+      renderPreview(modal, names);
+      confirm.disabled = names.length === 0;
+    };
+    textarea.addEventListener('input', refresh);
+    cancel.addEventListener('click', closeModal);
+    refresh();
+
+    confirm.addEventListener('click', async () => {
+      const names = parseNames(textarea.value);
+      const cate = modal.querySelector('[data-bb-skill-create-type]').value;
+      if (!names.length || !cate) return;
+      confirm.disabled = true;
+      cancel.disabled = true;
+      textarea.disabled = true;
+      modal.querySelector('[data-bb-skill-create-type]').disabled = true;
+      const failures = [];
+      for (let index = 0; index < names.length; index += 1) {
+        const row = modal.querySelector(`tr[data-row="${index}"]`);
+        if (row?.dataset.created === 'true') continue;
+        status.className = 'bb-skill-create-status';
+        status.textContent = `正在创建 ${index + 1}/${names.length}：${names[index]}`;
+        try {
+          await createOne(createUrl, names[index], cate);
+          row.lastElementChild.textContent = '创建成功';
+          row.dataset.created = 'true';
+        } catch (error) {
+          const message = error.message || '创建失败';
+          row.lastElementChild.textContent = message;
+          failures.push(`${names[index]}：${message}`);
+        }
+      }
+      if (failures.length) {
+        status.className = 'bb-skill-create-status error';
+        status.textContent = `完成，但有 ${failures.length} 个技能创建失败：\n${failures.join('\n')}`;
+        confirm.disabled = false;
+        cancel.disabled = false;
+        textarea.disabled = false;
+        modal.querySelector('[data-bb-skill-create-type]').disabled = false;
+      } else {
+        status.className = 'bb-skill-create-status';
+        status.textContent = `成功创建 ${names.length} 个技能，即将刷新列表。`;
+        window.setTimeout(() => window.location.reload(), 700);
+      }
+    });
+  }
+
+  function ensureButton() {
+    const createLink = Array.from(document.querySelectorAll('a[href*="/playbook/skills/create"]'))
+      .find(item => /添加技能/.test(item.textContent));
+    if (!createLink || document.querySelector(`[${BUTTON_ATTRIBUTE}]`)) return;
+    const button = document.createElement('a');
+    button.href = '#';
+    button.className = 'btn btn-sm btn-success';
+    button.setAttribute(BUTTON_ATTRIBUTE, 'true');
+    button.textContent = '批量创建技能';
+    button.addEventListener('click', event => {
+      event.preventDefault();
+      openModal().catch(error => window.alert(`打开批量创建失败：${error.message || error}`));
+    });
+    createLink.insertAdjacentElement('afterend', button);
+  }
+
+  function update() {
+    if (!isSkillList()) return;
+    ensureButton();
+  }
+
+  function schedule() {
+    window.clearTimeout(updateTimer);
+    updateTimer = window.setTimeout(update, 150);
+  }
+
+  new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
+  update();
+})();
+
 // 技能列表批量创建调查点：勾选技能后，按技能名称创建调查点并自动绑定对应技能包。
 (() => {
   'use strict';
