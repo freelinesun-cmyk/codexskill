@@ -443,6 +443,473 @@
   updateButtons();
 })();
 
+// Banner 快速创建：一次配置，按多个展示位置分别创建记录。
+(() => {
+  'use strict';
+
+  const BUTTON_ID = 'bb-banner-quick-create-button';
+  const MODAL_ID = 'bb-banner-quick-create-modal';
+  const STYLE_ID = 'bb-banner-quick-create-style';
+  const CREATE_URL = `${location.origin}/16d7m/bannerlists/create`;
+  let updateTimer = null;
+
+  const isBannerList = () => /\/bannerlists\/?$/.test(location.pathname);
+  const normalizeText = value => String(value ?? '').replace(/\s+/g, ' ').trim();
+  const toBackendTime = value => value ? `${value.replace('T', ' ')}${value.length === 16 ? ':00' : ''}` : '';
+
+  function addStyles() {
+    if (document.getElementById(STYLE_ID)) return;
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = `
+      #${MODAL_ID} { position:fixed; inset:0; z-index:100050; display:flex; align-items:center; justify-content:center; padding:24px; background:rgba(0,0,0,.48); }
+      #${MODAL_ID} .bb-banner-dialog { width:min(900px,94vw); max-height:92vh; overflow:auto; border-radius:5px; background:#fff; box-shadow:0 10px 35px rgba(0,0,0,.25); }
+      #${MODAL_ID} .bb-banner-head, #${MODAL_ID} .bb-banner-foot { display:flex; align-items:center; justify-content:space-between; padding:16px 20px; border-bottom:1px solid #eee; }
+      #${MODAL_ID} .bb-banner-foot { justify-content:flex-end; gap:8px; border-top:1px solid #eee; border-bottom:0; }
+      #${MODAL_ID} h3 { margin:0; font-weight:600; }
+      #${MODAL_ID} .bb-banner-body { padding:18px 20px; }
+      #${MODAL_ID} .bb-banner-field { margin-bottom:15px; }
+      #${MODAL_ID} .bb-banner-field > label { display:block; margin-bottom:6px; font-weight:600; }
+      #${MODAL_ID} .bb-banner-required { color:#dd4b39; }
+      #${MODAL_ID} .bb-banner-time-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+      #${MODAL_ID} .bb-banner-positions { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px 12px; padding:10px; border:1px solid #d2d6de; border-radius:3px; max-height:190px; overflow:auto; }
+      #${MODAL_ID} .bb-banner-position { display:flex; align-items:center; gap:6px; margin:0; font-weight:400; cursor:pointer; }
+      #${MODAL_ID} .bb-banner-preview { display:flex; align-items:center; gap:10px; margin-top:7px; color:#666; }
+      #${MODAL_ID} .bb-banner-preview img { width:130px; height:64px; object-fit:cover; border:1px solid #ddd; border-radius:3px; }
+      #${MODAL_ID} .bb-banner-status { margin-top:12px; padding:10px; border-radius:3px; background:#f4f7f9; white-space:pre-wrap; }
+      #${MODAL_ID} .bb-banner-status.is-error { color:#dd4b39; background:#fff2f1; }
+      @media (max-width:700px) { #${MODAL_ID} .bb-banner-positions { grid-template-columns:1fr 1fr; } #${MODAL_ID} .bb-banner-time-grid { grid-template-columns:1fr; } }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  async function readCreateForm() {
+    const response = await fetch(CREATE_URL, { credentials: 'same-origin' });
+    if (!response.ok) throw new Error(`读取 Banner 新增页失败：HTTP ${response.status}`);
+    const html = await response.text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const form = Array.from(doc.forms).find(item => item.method.toLowerCase() === 'post' && /\/bannerlists\/?$/.test(new URL(item.action, CREATE_URL).pathname));
+    if (!form) throw new Error('没有识别到 Banner 新增表单');
+    const actionSelect = form.querySelector('select[name="action_id"]');
+    const positionSelect = form.querySelector('select[name="pos"]');
+    const actions = Array.from(actionSelect?.options || []).filter(option => option.value).map(option => ({ id: option.value, name: normalizeText(option.textContent) }));
+    const positions = Array.from(positionSelect?.options || []).filter(option => option.value !== '').map(option => ({ id: option.value, name: normalizeText(option.textContent) }));
+    return { form, actions, positions, csrfToken: doc.querySelector('meta[name="csrf-token"]')?.content || '' };
+  }
+
+  function parseError(response, text) {
+    try {
+      const result = JSON.parse(text);
+      if (result && (result.status === false || result.success === false)) {
+        return normalizeText(result.message || result.error) || '后台返回保存失败';
+      }
+      return '';
+    } catch (_) {
+      const doc = new DOMParser().parseFromString(text, 'text/html');
+      return normalizeText(doc.querySelector('.alert-danger, .callout-danger, .has-error .help-block, .exception_message')?.textContent);
+    }
+  }
+
+  async function createBanner(source, values, position) {
+    const data = new FormData(source.form);
+    data.delete('after-save');
+    data.set('_previous_', location.href);
+    data.set('name', values.name);
+    data.set('image', values.image, values.image.name);
+    data.delete('large_image');
+    data.delete('activity_center_image');
+    data.set('action_id', values.actionId);
+    data.set('pos', position.id);
+    data.set('start_at', values.startAt);
+    data.set('end_at', values.endAt);
+    const response = await fetch(new URL(source.form.getAttribute('action') || '/16d7m/bannerlists', CREATE_URL).href, {
+      method: 'POST', body: data, credentials: 'same-origin',
+      headers: { 'X-Requested-With': 'XMLHttpRequest', ...(source.csrfToken ? { 'X-CSRF-TOKEN': source.csrfToken } : {}) },
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(parseError(response, text) || `HTTP ${response.status}`);
+    const error = parseError(response, text);
+    if (error) throw new Error(error);
+  }
+
+  function field(labelText, control, required = false) {
+    const wrap = document.createElement('div');
+    wrap.className = 'bb-banner-field';
+    const label = document.createElement('label');
+    label.textContent = labelText;
+    if (required) {
+      const mark = document.createElement('span');
+      mark.className = 'bb-banner-required';
+      mark.textContent = ' *';
+      label.appendChild(mark);
+    }
+    wrap.append(label, control);
+    return wrap;
+  }
+
+  async function openModal() {
+    document.getElementById(MODAL_ID)?.remove();
+    addStyles();
+    const overlay = document.createElement('div');
+    overlay.id = MODAL_ID;
+    overlay.innerHTML = `<div class="bb-banner-dialog"><div class="bb-banner-head"><h3>快速创建 Banner</h3><button type="button" class="close" aria-label="关闭">×</button></div><div class="bb-banner-body"><div class="bb-banner-status">正在读取后台字段和下拉选项…</div></div><div class="bb-banner-foot"><button type="button" class="btn btn-default bb-banner-cancel">取消</button><button type="button" class="btn btn-primary bb-banner-submit" disabled>按展示位置创建</button></div></div>`;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.querySelector('.close').addEventListener('click', close);
+    overlay.querySelector('.bb-banner-cancel').addEventListener('click', close);
+    overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
+    const body = overlay.querySelector('.bb-banner-body');
+    const submit = overlay.querySelector('.bb-banner-submit');
+
+    try {
+      const source = await readCreateForm();
+      body.replaceChildren();
+      const name = document.createElement('input'); name.type = 'text'; name.className = 'form-control'; name.placeholder = '输入活动名称';
+      const image = document.createElement('input'); image.type = 'file'; image.className = 'form-control'; image.accept = 'image/*';
+      const preview = document.createElement('div'); preview.className = 'bb-banner-preview'; preview.textContent = '尚未选择图片';
+      image.addEventListener('change', () => {
+        const file = image.files?.[0];
+        preview.replaceChildren();
+        if (!file) { preview.textContent = '尚未选择图片'; return; }
+        const img = document.createElement('img'); img.src = URL.createObjectURL(file); img.onload = () => URL.revokeObjectURL(img.src);
+        const text = document.createElement('span'); text.textContent = `${file.name}（${Math.ceil(file.size / 1024)} KB）`;
+        preview.append(img, text);
+      });
+      const imageWrap = field('活动图片', image, true); imageWrap.appendChild(preview);
+
+      const actionInput = document.createElement('input'); actionInput.type = 'text'; actionInput.className = 'form-control'; actionInput.placeholder = '输入名称或 ID 搜索并选择'; actionInput.setAttribute('list', 'bb-banner-actions');
+      const actionList = document.createElement('datalist'); actionList.id = 'bb-banner-actions';
+      const actionMap = new Map();
+      source.actions.forEach(action => {
+        const display = `${action.name}（ID: ${action.id}）`;
+        actionMap.set(display, action.id);
+        const option = document.createElement('option'); option.value = display; actionList.appendChild(option);
+      });
+      const actionWrap = field('跳转动作', actionInput, true); actionWrap.appendChild(actionList);
+
+      const positions = document.createElement('div'); positions.className = 'bb-banner-positions';
+      source.positions.forEach(position => {
+        const label = document.createElement('label'); label.className = 'bb-banner-position';
+        const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.value = position.id; checkbox.dataset.name = position.name;
+        label.append(checkbox, document.createTextNode(position.name)); positions.appendChild(label);
+      });
+
+      const startAt = document.createElement('input'); startAt.type = 'datetime-local'; startAt.step = '1'; startAt.className = 'form-control';
+      const endAt = document.createElement('input'); endAt.type = 'datetime-local'; endAt.step = '1'; endAt.className = 'form-control';
+      const timeGrid = document.createElement('div'); timeGrid.className = 'bb-banner-time-grid'; timeGrid.append(field('生效时间', startAt, true), field('失效时间', endAt, true));
+      const status = document.createElement('div'); status.className = 'bb-banner-status'; status.textContent = '填写后将按所选展示位置分别创建 Banner。';
+      body.append(field('活动名称', name, true), imageWrap, actionWrap, field('展示位置（可多选）', positions, true), timeGrid, status);
+      submit.disabled = false;
+
+      submit.addEventListener('click', async () => {
+        const selectedPositions = Array.from(positions.querySelectorAll('input:checked')).map(input => ({ id: input.value, name: input.dataset.name }));
+        const actionId = actionMap.get(actionInput.value) || (/^\d+$/.test(actionInput.value.trim()) && source.actions.some(item => item.id === actionInput.value.trim()) ? actionInput.value.trim() : '');
+        const values = { name: normalizeText(name.value), image: image.files?.[0], actionId, startAt: toBackendTime(startAt.value), endAt: toBackendTime(endAt.value) };
+        const errors = [];
+        if (!values.name) errors.push('请填写活动名称');
+        if (!values.image) errors.push('请选择活动图片');
+        if (!values.actionId) errors.push('请从列表中选择跳转动作');
+        if (!selectedPositions.length) errors.push('请至少选择一个展示位置');
+        if (!values.startAt || !values.endAt) errors.push('请设置生效时间和失效时间');
+        if (values.startAt && values.endAt && values.startAt >= values.endAt) errors.push('失效时间必须晚于生效时间');
+        if (errors.length) { status.className = 'bb-banner-status is-error'; status.textContent = errors.join('\n'); return; }
+        submit.disabled = true; overlay.querySelector('.bb-banner-cancel').disabled = true; status.className = 'bb-banner-status';
+        const lines = [];
+        let successCount = 0;
+        let failureCount = 0;
+        for (let i = 0; i < selectedPositions.length; i += 1) {
+          const position = selectedPositions[i];
+          lines.push(`正在创建 ${i + 1}/${selectedPositions.length}：${position.name}…`); status.textContent = lines.join('\n');
+          try { await createBanner(source, values, position); successCount += 1; lines[lines.length - 1] = `✓ ${position.name}：创建成功`; }
+          catch (error) { failureCount += 1; lines[lines.length - 1] = `✗ ${position.name}：${error.message || error}`; }
+          status.textContent = lines.join('\n');
+        }
+        status.className = failureCount ? 'bb-banner-status is-error' : 'bb-banner-status';
+        submit.textContent = failureCount ? '存在失败记录，请核对结果' : '全部创建完成';
+        if (successCount > 0) {
+          const refreshButton = document.createElement('button');
+          refreshButton.type = 'button';
+          refreshButton.className = 'btn btn-success bb-banner-refresh';
+          refreshButton.textContent = '关闭并刷新页面';
+          refreshButton.addEventListener('click', () => location.reload());
+          submit.insertAdjacentElement('afterend', refreshButton);
+          overlay.querySelector('.bb-banner-cancel').disabled = false;
+        }
+      });
+    } catch (error) {
+      body.innerHTML = `<div class="bb-banner-status is-error"></div>`;
+      body.firstElementChild.textContent = error.message || String(error);
+    }
+  }
+
+  function updateButton() {
+    if (!isBannerList() || document.getElementById(BUTTON_ID)) return;
+    addStyles();
+    const createLink = document.querySelector('a[href$="/bannerlists/create"]');
+    if (!createLink) return;
+    const button = document.createElement('button'); button.id = BUTTON_ID; button.type = 'button'; button.className = 'btn btn-success'; button.style.marginLeft = '6px'; button.textContent = '快速创建';
+    button.addEventListener('click', openModal); createLink.insertAdjacentElement('afterend', button);
+  }
+  function schedule() { window.clearTimeout(updateTimer); updateTimer = window.setTimeout(updateButton, 120); }
+  new MutationObserver(schedule).observe(document.documentElement, { childList:true, subtree:true });
+  window.addEventListener('popstate', schedule); window.setInterval(updateButton, 700); updateButton();
+})();
+
+// 收藏物品列表行内编辑：生效时间、点亮奖励经验值。
+(() => {
+  'use strict';
+
+  const STYLE_ID = 'bb-collect-gift-inline-style';
+  const CELL_ATTRIBUTE = 'data-bb-gift-inline-edit';
+  const EDITING_ATTRIBUTE = 'data-bb-gift-inline-editing';
+  let updateTimer = null;
+
+  const normalizeText = value => String(value ?? '').replace(/\s+/g, ' ').trim();
+  const isGiftList = () => /\/collect\/gifts\/?$/.test(location.pathname);
+
+  function addStyles() {
+    if (document.getElementById(STYLE_ID)) return;
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = `
+      td[${CELL_ATTRIBUTE}] { min-width: 145px; }
+      .bb-gift-inline-button { padding: 3px 5px; border: 0; color: #333; background: transparent; font-size: inherit; text-align: left; white-space: normal; }
+      .bb-gift-inline-button:hover, .bb-gift-inline-button:focus { color: #3c8dbc; background: #eef7fc; text-decoration: none; }
+      .bb-gift-inline-pencil { margin-left: 6px; color: #3c8dbc; opacity: .72; }
+      .bb-gift-inline-empty { color: #999; }
+      .bb-gift-inline-editor { display: flex; align-items: center; gap: 5px; min-width: 245px; }
+      .bb-gift-inline-editor input { width: 155px; min-width: 0; }
+      td.column-exp_value .bb-gift-inline-editor { min-width: 190px; }
+      td.column-exp_value .bb-gift-inline-editor input { width: 95px; }
+      .bb-gift-inline-status { display: block; margin-top: 4px; color: #00a65a; font-size: 12px; white-space: normal; }
+      .bb-gift-inline-status.is-error { color: #dd4b39; }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  async function getEditForm(editUrl) {
+    const response = await fetch(editUrl, { credentials: 'same-origin' });
+    if (!response.ok) throw new Error(`读取藏品失败：HTTP ${response.status}`);
+    const html = await response.text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const form = Array.from(doc.forms).find(item => {
+      if (String(item.method).toLowerCase() !== 'post') return false;
+      try {
+        return /\/collect\/gifts\/\d+\/?$/.test(new URL(item.getAttribute('action') || '', editUrl).pathname);
+      } catch (_) {
+        return false;
+      }
+    });
+    if (!form) throw new Error('没有识别到藏品编辑表单');
+    return { form, csrfToken: doc.querySelector('meta[name="csrf-token"]')?.content || '' };
+  }
+
+  function firstMeaningfulValue(form, name, preferSelect = false) {
+    const controls = Array.from(form.elements).filter(control => control.name === name && !control.disabled);
+    const preferred = preferSelect ? controls.filter(control => control.tagName === 'SELECT') : controls;
+    return [...preferred, ...controls].map(control => String(control.value ?? '').trim()).find(Boolean) ?? '';
+  }
+
+  function collapseDuplicateGiftFields(form, data) {
+    // 页面会同时渲染多个类别的隐藏子表单。FormData 直接提交会产生大量重复
+    // foreign_id，且最后一个通常为空，导致后台更新时出现 HTTP 500。
+    const cate = firstMeaningfulValue(form, 'cate', true);
+    const subtype = firstMeaningfulValue(form, 'subtype', true);
+    const foreignId = firstMeaningfulValue(form, 'foreign_id', true);
+    const scalarNames = ['cate', 'subtype', 'foreign_id', 'enable', 'is_show', 'exp_value', 'uri', 'start_at'];
+    scalarNames.forEach(name => data.delete(name));
+    if (cate) data.set('cate', cate);
+    if (subtype) data.set('subtype', subtype);
+    if (foreignId) data.set('foreign_id', foreignId);
+    data.set('enable', firstMeaningfulValue(form, 'enable'));
+    data.set('is_show', firstMeaningfulValue(form, 'is_show'));
+    data.set('exp_value', firstMeaningfulValue(form, 'exp_value'));
+    data.set('uri', firstMeaningfulValue(form, 'uri'));
+    data.set('start_at', firstMeaningfulValue(form, 'start_at'));
+    data.delete('_bbshow_subtype');
+  }
+
+  async function saveField(editUrl, fieldName, value) {
+    const { form, csrfToken } = await getEditForm(editUrl);
+    const data = new FormData(form);
+    collapseDuplicateGiftFields(form, data);
+    data.set(fieldName, value);
+    data.delete('after-save');
+    data.set('_previous_', location.href);
+    const actionUrl = new URL(form.getAttribute('action') || editUrl, editUrl);
+    const response = await fetch(actionUrl.href, {
+      method: 'POST',
+      body: data,
+      credentials: 'same-origin',
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest',
+        ...(csrfToken ? { 'X-CSRF-TOKEN': csrfToken } : {}),
+      },
+    });
+    const resultText = await response.text();
+    if (!response.ok) {
+      let detail = '';
+      try {
+        const result = JSON.parse(resultText);
+        detail = normalizeText(result.message || result.error);
+      } catch (_) {
+        const errorDoc = new DOMParser().parseFromString(resultText, 'text/html');
+        detail = normalizeText(errorDoc.querySelector('.alert-danger, .callout-danger, .exception_message')?.textContent);
+      }
+      throw new Error(detail || `HTTP ${response.status}`);
+    }
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      let result = null;
+      try { result = JSON.parse(resultText); } catch (_) { /* 按成功响应处理 */ }
+      if (result && (result.status === false || result.success === false)) {
+        throw new Error(normalizeText(result.message) || '后台返回保存失败');
+      }
+      return;
+    }
+    const resultDoc = new DOMParser().parseFromString(resultText, 'text/html');
+    const error = resultDoc.querySelector('.alert-danger, .callout-danger, .has-error .help-block');
+    const errorText = normalizeText(error?.textContent);
+    if (errorText) throw new Error(errorText);
+  }
+
+  function renderValue(cell, editUrl, fieldName, value, saved = false) {
+    cell.removeAttribute(EDITING_ATTRIBUTE);
+    cell.dataset.bbGiftValue = value;
+    cell.replaceChildren();
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'bb-gift-inline-button';
+    button.title = fieldName === 'start_at' ? '点击修改生效时间' : '点击修改点亮奖励经验值';
+    const label = document.createElement('span');
+    label.textContent = value || '未设置';
+    if (!value) label.className = 'bb-gift-inline-empty';
+    const pencil = document.createElement('span');
+    pencil.className = 'bb-gift-inline-pencil';
+    pencil.textContent = '✎';
+    button.append(label, pencil);
+    button.addEventListener('click', event => {
+      event.preventDefault();
+      beginEdit(cell, editUrl, fieldName);
+    });
+    cell.appendChild(button);
+    if (saved) {
+      const status = document.createElement('span');
+      status.className = 'bb-gift-inline-status';
+      status.textContent = '已保存';
+      cell.appendChild(status);
+      window.setTimeout(() => status.remove(), 1600);
+    }
+  }
+
+  function beginEdit(cell, editUrl, fieldName) {
+    if (cell.hasAttribute(EDITING_ATTRIBUTE)) return;
+    cell.setAttribute(EDITING_ATTRIBUTE, 'true');
+    const currentValue = cell.dataset.bbGiftValue || '';
+    cell.replaceChildren();
+
+    const editor = document.createElement('div');
+    editor.className = 'bb-gift-inline-editor';
+    const input = document.createElement('input');
+    input.type = fieldName === 'exp_value' ? 'number' : 'datetime-local';
+    input.className = 'form-control input-sm';
+    input.value = fieldName === 'start_at' ? currentValue.replace(' ', 'T') : currentValue;
+    input.placeholder = fieldName === 'start_at' ? 'YYYY-MM-DD HH:mm:ss' : '经验值';
+    input.setAttribute('aria-label', fieldName === 'start_at' ? '生效时间' : '点亮奖励经验值');
+    if (fieldName === 'exp_value') {
+      input.min = '0';
+      input.step = '1';
+    } else {
+      input.step = '1';
+    }
+    const saveButton = document.createElement('button');
+    saveButton.type = 'button';
+    saveButton.className = 'btn btn-xs btn-success';
+    saveButton.textContent = '保存';
+    const cancelButton = document.createElement('button');
+    cancelButton.type = 'button';
+    cancelButton.className = 'btn btn-xs btn-default';
+    cancelButton.textContent = '取消';
+    editor.append(input, saveButton, cancelButton);
+    const status = document.createElement('span');
+    status.className = 'bb-gift-inline-status is-error';
+    cell.append(editor, status);
+
+    const cancel = () => renderValue(cell, editUrl, fieldName, currentValue);
+    const save = async () => {
+      let nextValue = input.value.trim();
+      if (fieldName === 'start_at' && nextValue) {
+        nextValue = nextValue.replace('T', ' ');
+        if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(nextValue)) nextValue += ':00';
+      }
+      if (fieldName === 'start_at' && nextValue && !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(nextValue)) {
+        status.textContent = '请使用 YYYY-MM-DD HH:mm:ss 格式，或留空';
+        input.focus();
+        return;
+      }
+      if (fieldName === 'exp_value' && !/^\d+$/.test(nextValue)) {
+        status.textContent = '经验值必须是非负整数';
+        input.focus();
+        return;
+      }
+      if (nextValue === currentValue) {
+        cancel();
+        return;
+      }
+      input.disabled = true;
+      saveButton.disabled = true;
+      cancelButton.disabled = true;
+      saveButton.textContent = '保存中…';
+      status.textContent = '';
+      try {
+        await saveField(editUrl, fieldName, nextValue);
+        renderValue(cell, editUrl, fieldName, nextValue, true);
+      } catch (error) {
+        console.warn('[百变后台收藏物品] 行内保存失败', error);
+        status.textContent = `保存失败：${error.message || error}`;
+        input.disabled = false;
+        saveButton.disabled = false;
+        cancelButton.disabled = false;
+        saveButton.textContent = '保存';
+        input.focus();
+      }
+    };
+    saveButton.addEventListener('click', save);
+    cancelButton.addEventListener('click', cancel);
+    input.addEventListener('keydown', event => {
+      if (event.key === 'Enter') { event.preventDefault(); save(); }
+      if (event.key === 'Escape') { event.preventDefault(); cancel(); }
+    });
+    input.focus();
+    input.select();
+  }
+
+  function updateCells() {
+    if (!isGiftList()) return;
+    addStyles();
+    document.querySelectorAll('table tbody tr').forEach(row => {
+      const editLink = row.querySelector('a.grid-row-edit[href*="/collect/gifts/"][href$="/edit"]');
+      if (!editLink) return;
+      [['start_at', '.column-start_at'], ['exp_value', '.column-exp_value']].forEach(([fieldName, selector]) => {
+        const cell = row.querySelector(selector);
+        if (!cell || cell.hasAttribute(CELL_ATTRIBUTE)) return;
+        const value = normalizeText(cell.textContent);
+        cell.setAttribute(CELL_ATTRIBUTE, fieldName);
+        renderValue(cell, editLink.href, fieldName, value);
+      });
+    });
+  }
+
+  function schedule() {
+    window.clearTimeout(updateTimer);
+    updateTimer = window.setTimeout(updateCells, 120);
+  }
+  new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
+  window.addEventListener('popstate', schedule);
+  window.setInterval(updateCells, 700);
+  updateCells();
+})();
+
 // 回合事件编辑：为“触发动作”多选框增加全选、反选和清空。
 (() => {
   'use strict';
@@ -4327,12 +4794,23 @@
       #${BATCH_MODAL_ID} .bb-round-map-header { padding: 20px 24px 12px; }
       #${BATCH_MODAL_ID} .bb-round-map-title { margin: 0 0 6px; color: #34495e; font-size: 24px; font-weight: 600; }
       #${BATCH_MODAL_ID} .bb-round-map-subtitle { color: #6b7b8b; font-size: 14px; }
+      #${BATCH_MODAL_ID} .bb-round-map-character-control { margin-top: 12px; padding: 10px 12px; border: 1px solid #d8e3ed; border-radius: 4px; background: #f8fbfd; }
+      #${BATCH_MODAL_ID} .bb-round-map-character-label { display: flex; align-items: center; gap: 8px; margin: 0; color: #34495e; cursor: pointer; font-weight: 600; }
+      #${BATCH_MODAL_ID} .bb-round-map-character-label input { margin: 0; }
+      #${BATCH_MODAL_ID} .bb-round-map-character-match { margin-top: 6px; color: #6b7b8b; font-size: 13px; }
+      #${BATCH_MODAL_ID} .bb-round-map-character-match.is-error { color: #dd4b39; }
+      #${BATCH_MODAL_ID} .bb-round-map-character-match.is-success { color: #00a65a; }
+      #${BATCH_MODAL_ID} .bb-round-map-character-match.is-warning { color: #f39c12; }
       #${BATCH_MODAL_ID} .bb-round-map-body { min-height: 150px; padding: 8px 24px 18px; overflow: auto; }
       #${BATCH_MODAL_ID} .bb-round-map-batch-list { border: 1px solid #d8e3ed; border-radius: 4px; overflow: hidden; }
       #${BATCH_MODAL_ID} .bb-round-map-batch-row { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(260px, 1.25fr); gap: 14px; align-items: center; padding: 12px 14px; border-bottom: 1px solid #edf1f4; }
       #${BATCH_MODAL_ID} .bb-round-map-batch-row:last-child { border-bottom: 0; }
       #${BATCH_MODAL_ID} .bb-round-map-batch-map-name { color: #34495e; font-weight: 600; overflow-wrap: anywhere; }
       #${BATCH_MODAL_ID} .bb-round-map-batch-map-id { margin-top: 3px; color: #95a5a6; font-size: 12px; }
+      #${BATCH_MODAL_ID} .bb-round-map-batch-character { margin-top: 4px; color: #6b7b8b; font-size: 12px; }
+      #${BATCH_MODAL_ID} .bb-round-map-batch-character.is-error { color: #dd4b39; }
+      #${BATCH_MODAL_ID} .bb-round-map-batch-character.is-success { color: #00a65a; }
+      #${BATCH_MODAL_ID} .bb-round-map-batch-character.is-warning { color: #f39c12; }
       #${BATCH_MODAL_ID} .bb-round-map-batch-select { width: 100%; min-height: 34px; }
       #${BATCH_MODAL_ID} .bb-round-map-batch-result { margin-top: 12px; padding: 10px 12px; border-radius: 4px; color: #6b7b8b; background: #f4f7f9; white-space: pre-wrap; }
       #${BATCH_MODAL_ID} .bb-round-map-batch-result.is-error { color: #dd4b39; background: #fff3f2; }
@@ -4650,7 +5128,14 @@
     modal.addEventListener('click', event => { if (event.target === modal) closeModal(); });
 
     try {
-      const [rounds, characters] = await Promise.all([loadRounds(), loadCharacters()]);
+      const rounds = await loadRounds();
+      let characters = [];
+      let characterLoadError = '';
+      try {
+        characters = await loadCharacters();
+      } catch (error) {
+        characterLoadError = error.message || String(error);
+      }
       if (!modal.isConnected) return;
       const matchedCharacter = matchCharacterFromMapName(map.name, characters);
       let createdActionId = '';
@@ -4747,8 +5232,14 @@
     if (!editLink) return null;
     const match = (editLink.getAttribute('href') || '').match(/\/playbook\/maps\/(\d+)\/edit/);
     const id = match?.[1] || '';
-    const nameCell = editLink.closest('td');
-    const name = normalizeText(nameCell?.dataset.bbMapTitle || nameCell?.textContent) || `地图 ${id}`;
+    // 编辑链接位于“操作”列，不能从链接所在单元格读取地图名；否则会把整列按钮文字当作名称。
+    const nameCell = row.querySelector('td.column-title, td[data-bb-map-inline-title]');
+    const inlineLabel = nameCell?.querySelector('.bb-map-inline-title-button > span:not(.bb-map-inline-title-pencil)');
+    const name = normalizeText(
+      nameCell?.dataset.bbMapTitle
+      || inlineLabel?.textContent
+      || nameCell?.textContent?.replace(/✎/g, '')
+    ) || `地图 ${id}`;
     return id ? { id, name, editLink } : null;
   }
 
@@ -4815,6 +5306,13 @@
         <div class="bb-round-map-header">
           <h3 class="bb-round-map-title" id="bb-round-map-batch-title">快速创建回合地图</h3>
           <div class="bb-round-map-subtitle">已选择 ${maps.length} 张地图。请为每张地图指定回合，提交后将按列表顺序逐条创建动作并加入“回合开始”事件。</div>
+          <div class="bb-round-map-character-control">
+            <label class="bb-round-map-character-label">
+              <input type="checkbox" data-bb-round-map-batch-character-only>
+              角色独立地图
+            </label>
+            <div class="bb-round-map-character-match" data-bb-round-map-batch-character-match>未勾选时，每张地图的动作默认选择全部角色。</div>
+          </div>
         </div>
         <div class="bb-round-map-body"><div class="bb-round-map-status">正在读取回合列表…</div></div>
         <div class="bb-round-map-footer">
@@ -4827,14 +5325,18 @@
     const body = modal.querySelector('.bb-round-map-body');
     const submit = modal.querySelector('[data-bb-round-map-batch-submit]');
     const cancel = modal.querySelector('[data-bb-round-map-batch-cancel]');
+    const characterOnly = modal.querySelector('[data-bb-round-map-batch-character-only]');
+    const characterMatch = modal.querySelector('[data-bb-round-map-batch-character-match]');
     cancel.addEventListener('click', closeBatchModal);
     modal.addEventListener('click', event => { if (event.target === modal) closeBatchModal(); });
 
     try {
-      const rounds = await loadRounds();
+      const [rounds, characters] = await Promise.all([loadRounds(), loadCharacters()]);
       if (!modal.isConnected) return;
+      const matchedCharacters = new Map(maps.map(map => [String(map.id), matchCharacterFromMapName(map.name, characters)]));
       const list = document.createElement('div');
       list.className = 'bb-round-map-batch-list';
+      const characterElements = new Map();
       maps.forEach(map => {
         const row = document.createElement('div');
         row.className = 'bb-round-map-batch-row';
@@ -4845,7 +5347,12 @@
         const id = document.createElement('div');
         id.className = 'bb-round-map-batch-map-id';
         id.textContent = `地图 ID：${map.id}`;
-        info.append(name, id);
+        const character = document.createElement('div');
+        character.className = 'bb-round-map-batch-character';
+        character.dataset.mapCharacterId = map.id;
+        character.hidden = true;
+        characterElements.set(String(map.id), character);
+        info.append(name, id, character);
         const select = document.createElement('select');
         select.className = 'form-control bb-round-map-batch-select';
         select.dataset.mapId = map.id;
@@ -4867,14 +5374,42 @@
       result.hidden = true;
       body.replaceChildren(list, result);
       const selects = Array.from(list.querySelectorAll('select[data-map-id]'));
-      const updateSubmit = () => { submit.disabled = selects.some(select => !select.value); };
+      const updateSubmit = () => {
+        const unmatchedMaps = maps.filter(map => !matchedCharacters.get(String(map.id)));
+        const hasCharacterError = characterOnly.checked && Boolean(characterLoadError);
+        submit.disabled = selects.some(select => !select.value);
+        characterMatch.classList.remove('is-error');
+        characterMatch.classList.toggle('is-warning', characterOnly.checked && (hasCharacterError || unmatchedMaps.length > 0));
+        characterMatch.classList.toggle('is-success', characterOnly.checked && !hasCharacterError && unmatchedMaps.length === 0);
+        characterMatch.textContent = characterOnly.checked
+          ? (hasCharacterError
+            ? `角色列表读取失败，将全部按“全部角色”创建：${characterLoadError}`
+            : unmatchedMaps.length
+            ? `已匹配 ${maps.length - unmatchedMaps.length} 张角色地图；另有 ${unmatchedMaps.length} 张普通地图未匹配角色，将按“全部角色”创建。`
+            : `已成功匹配 ${maps.length} 张地图对应的角色，创建动作时将逐张选择对应角色。`)
+          : '未勾选时，每张地图的动作默认选择全部角色。';
+        maps.forEach(map => {
+          const element = characterElements.get(String(map.id));
+          const matched = matchedCharacters.get(String(map.id));
+          if (!element) return;
+          element.hidden = !characterOnly.checked;
+          element.classList.remove('is-error');
+          element.classList.toggle('is-warning', characterOnly.checked && !matched);
+          element.classList.toggle('is-success', characterOnly.checked && Boolean(matched));
+          element.textContent = matched
+            ? `匹配角色：${matched.name}（ID：${matched.id}）`
+            : `未匹配角色，将选择全部角色`;
+        });
+      };
       selects.forEach(select => select.addEventListener('change', updateSubmit));
+      characterOnly.addEventListener('change', updateSubmit);
       updateSubmit();
 
       submit.addEventListener('click', async () => {
         if (selects.some(select => !select.value)) return;
         submit.disabled = true;
         cancel.disabled = true;
+        characterOnly.disabled = true;
         selects.forEach(select => { select.disabled = true; });
         const lines = [];
         let successCount = 0;
@@ -4889,7 +5424,8 @@
           result.textContent = [...lines, `正在处理：${map.name} → ${round?.name || ''}`].join('\n');
           let actionId = '';
           try {
-            actionId = await createRoundMapAction(map, round);
+            const actionCharacter = characterOnly.checked ? matchedCharacters.get(String(map.id)) : null;
+            actionId = await createRoundMapAction(map, round, actionCharacter);
             await addToRoundStart(actionId, round);
             saveMapRecord(map, round, actionId);
             renderMapRecord(map.row, map);
