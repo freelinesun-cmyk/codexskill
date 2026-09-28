@@ -3,6 +3,19 @@
 本文件记录“我是谜后台辅助工具”的公开版本变化。后续每次发布都应先更新
 `manifest.json` 版本号和本文件，再提交源码、安装包并创建同名 Git 标签。
 
+## [2.5.11] - 2026-09-28
+
+### 新增
+
+- “添加投票选项图片”支持一次选择包含多个投票子目录的总文件夹，并自动填充当前勾选的全部投票。
+- 新增《投票图片文件夹整理说明》，包含可直接交给 AI 使用的目录整理规范。
+
+### 匹配与校验
+
+- 投票子文件夹优先按清理后的完整标题匹配，支持唯一近似标题；标题差异较大时可用 `01、02……` 前缀按当前勾选列表顺序兜底。
+- 子文件夹内图片按数字文件名自然排序并依次对应选项；未匹配、歧义、缺少文件夹或图片数量不符时禁止上传。
+- 保留原有按单个投票选择多张图片的入口，选择文件夹后仍需人工确认才会上传。
+
 ## [2.5.10] - 2026-09-23
 
 ### 新增
@@ -46,6 +59,7 @@
 
 - 将线索列表分页逻辑拆分到独立的 `clue.js`，减少与其他页面功能的耦合。
 
+[2.5.11]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.11/extensions/woshimi-admin-helper
 [2.5.10]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.10/extensions/woshimi-admin-helper
 [2.5.9]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.9/extensions/woshimi-admin-helper
 [2.5.8]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.8/extensions/woshimi-admin-helper

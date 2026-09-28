@@ -1458,6 +1458,63 @@
   const BUTTON = 'data-vote-list-option-images';
   const MODAL = 'vote-list-option-images-modal';
   const clean = value => String(value?.textContent ?? value ?? '').replace(/\s+/g, ' ').trim();
+  const imageNamePattern = /\.(?:avif|bmp|gif|jpe?g|png|webp)$/i;
+
+  function normalizedVoteTitle(value) {
+    return String(value || '')
+      .normalize('NFKC')
+      .replace(/^\s*\d+\s*[_\-—.、]\s*/, '')
+      .replace(/[（(]\s*多选\s*[）)]\s*$/i, '')
+      .replace(/[\s\p{P}\p{S}]+/gu, '')
+      .toLowerCase();
+  }
+
+  function titleSimilarity(leftValue, rightValue) {
+    const left = normalizedVoteTitle(leftValue);
+    const right = normalizedVoteTitle(rightValue);
+    if (!left || !right) return 0;
+    if (left === right) return 1;
+    const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+    for (let leftIndex = 1; leftIndex <= left.length; leftIndex++) {
+      let diagonal = previous[0];
+      previous[0] = leftIndex;
+      for (let rightIndex = 1; rightIndex <= right.length; rightIndex++) {
+        const above = previous[rightIndex];
+        previous[rightIndex] = Math.min(
+          previous[rightIndex] + 1,
+          previous[rightIndex - 1] + 1,
+          diagonal + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1)
+        );
+        diagonal = above;
+      }
+    }
+    return 1 - previous[right.length] / Math.max(left.length, right.length);
+  }
+
+  function folderRecords(files) {
+    const groups = new Map();
+    [...files].filter(file => file.type.startsWith('image/') || imageNamePattern.test(file.name)).forEach(file => {
+      const parts = String(file.webkitRelativePath || file.name).split('/').filter(Boolean);
+      if (parts.length < 3) return;
+      const parentPath = parts.slice(0, -1).join('/');
+      if (!groups.has(parentPath)) {
+        const name = parts.at(-2);
+        const orderMatch = name.match(/^\s*(\d+)\s*[_\-—.、]/);
+        groups.set(parentPath, {
+          path: parentPath,
+          name,
+          order: orderMatch ? Number(orderMatch[1]) : null,
+          files: []
+        });
+      }
+      groups.get(parentPath).files.push(file);
+    });
+    const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
+    return [...groups.values()].map(group => {
+      group.files.sort((left, right) => collator.compare(left.name, right.name));
+      return group;
+    });
+  }
 
   function isPage() {
     return /\/modules\/drama\/drama_vote(?:\/|$)/.test(location.pathname)
@@ -1585,7 +1642,7 @@
   function styles() {
     if (document.getElementById(`${MODAL}-style`)) return;
     const style = document.createElement('style'); style.id = `${MODAL}-style`;
-    style.textContent = `#${MODAL}{position:fixed;z-index:2147483647;inset:0;background:rgba(0,0,0,.48);display:flex;align-items:center;justify-content:center}#${MODAL} .vl-panel{width:min(1180px,calc(100vw - 40px));height:min(820px,calc(100vh - 40px));box-sizing:border-box;background:#fff;border-radius:7px;display:flex;flex-direction:column;padding:22px;box-shadow:0 16px 45px rgba(0,0,0,.3)}#${MODAL} h3{margin:0 0 8px}#${MODAL} .vl-note{color:#666;margin-bottom:12px}#${MODAL} .vl-list{flex:1;overflow:auto;border:1px solid #dfe5eb;background:#f7f9fb;padding:12px}#${MODAL} .vl-vote{background:#fff;border:1px solid #dfe5eb;border-radius:5px;margin-bottom:14px;overflow:hidden}#${MODAL} .vl-vote-title{padding:11px 14px;background:#eef5fb;font-weight:700;color:#245b88}#${MODAL} .vl-vote-picker{display:grid;grid-template-columns:minmax(220px,1fr) auto;gap:12px;align-items:center;padding:12px 14px;background:#fff8e8;border-top:1px solid #ead9ad}#${MODAL} .vl-vote-hint{grid-column:1/-1;color:#777;font-size:13px}#${MODAL} .vl-row{display:grid;grid-template-columns:55px minmax(180px,1fr) 170px minmax(180px,1fr);gap:14px;align-items:center;padding:10px 14px;border-top:1px solid #eee}#${MODAL} .vl-index{font-weight:700;color:#888}#${MODAL} .vl-preview{width:150px;height:92px;object-fit:contain;background:#f2f2f2;border:1px solid #ddd;border-radius:4px}#${MODAL} .vl-file-name{color:#666;word-break:break-all}#${MODAL} .vl-picker{width:100%}#${MODAL} .vl-clear{white-space:nowrap}#${MODAL} .vl-status{white-space:pre-line;color:#337ab7;margin-top:10px;max-height:90px;overflow:auto}#${MODAL} .vl-actions{text-align:right;margin-top:14px}#${MODAL} .vl-actions button{margin-left:8px}#${MODAL}.vl-picker-open{justify-content:flex-end;padding:12px}#${MODAL}.vl-picker-open .vl-panel{width:min(420px,calc(100vw - 24px));height:calc(100vh - 24px);padding:14px}#${MODAL}.vl-picker-open .vl-note,#${MODAL}.vl-picker-open .vl-vote-picker,#${MODAL}.vl-picker-open .vl-status,#${MODAL}.vl-picker-open .vl-actions{display:none}#${MODAL}.vl-picker-open .vl-list{padding:6px}#${MODAL}.vl-picker-open .vl-vote{margin-bottom:8px}#${MODAL}.vl-picker-open .vl-row{grid-template-columns:70px minmax(0,1fr);min-height:42px;padding:7px 10px;gap:8px}#${MODAL}.vl-picker-open .vl-preview,#${MODAL}.vl-picker-open .vl-file-name{display:none}`;
+    style.textContent = `#${MODAL}{position:fixed;z-index:2147483647;inset:0;background:rgba(0,0,0,.48);display:flex;align-items:center;justify-content:center}#${MODAL} .vl-panel{width:min(1180px,calc(100vw - 40px));height:min(820px,calc(100vh - 40px));box-sizing:border-box;background:#fff;border-radius:7px;display:flex;flex-direction:column;padding:22px;box-shadow:0 16px 45px rgba(0,0,0,.3)}#${MODAL} h3{margin:0 0 8px}#${MODAL} .vl-note{color:#666;margin-bottom:10px}#${MODAL} .vl-folder-picker{display:grid;grid-template-columns:190px minmax(260px,1fr);align-items:center;gap:8px 14px;margin-bottom:12px;padding:11px 14px;border:1px solid #b8d9f2;border-radius:5px;background:#eef8ff}#${MODAL} .vl-folder-title{font-weight:700;color:#245b88}#${MODAL} .vl-folder-input{width:100%}#${MODAL} .vl-folder-hint{grid-column:1/-1;color:#54758e;font-size:13px;line-height:1.55}#${MODAL} .vl-list{flex:1;overflow:auto;border:1px solid #dfe5eb;background:#f7f9fb;padding:12px}#${MODAL} .vl-vote{background:#fff;border:1px solid #dfe5eb;border-radius:5px;margin-bottom:14px;overflow:hidden}#${MODAL} .vl-vote-title{padding:11px 14px;background:#eef5fb;font-weight:700;color:#245b88}#${MODAL} .vl-vote-picker{display:grid;grid-template-columns:minmax(220px,1fr) auto;gap:12px;align-items:center;padding:12px 14px;background:#fff8e8;border-top:1px solid #ead9ad}#${MODAL} .vl-vote-hint{grid-column:1/-1;color:#777;font-size:13px}#${MODAL} .vl-row{display:grid;grid-template-columns:55px minmax(180px,1fr) 170px minmax(180px,1fr);gap:14px;align-items:center;padding:10px 14px;border-top:1px solid #eee}#${MODAL} .vl-index{font-weight:700;color:#888}#${MODAL} .vl-preview{width:150px;height:92px;object-fit:contain;background:#f2f2f2;border:1px solid #ddd;border-radius:4px}#${MODAL} .vl-file-name{color:#666;word-break:break-all}#${MODAL} .vl-picker{width:100%}#${MODAL} .vl-clear{white-space:nowrap}#${MODAL} .vl-status{white-space:pre-line;color:#337ab7;margin-top:10px;max-height:110px;overflow:auto}#${MODAL} .vl-actions{text-align:right;margin-top:14px}#${MODAL} .vl-actions button{margin-left:8px}#${MODAL}.vl-picker-open{justify-content:flex-end;padding:12px}#${MODAL}.vl-picker-open .vl-panel{width:min(420px,calc(100vw - 24px));height:calc(100vh - 24px);padding:14px}#${MODAL}.vl-picker-open .vl-note,#${MODAL}.vl-picker-open .vl-folder-picker,#${MODAL}.vl-picker-open .vl-vote-picker,#${MODAL}.vl-picker-open .vl-status,#${MODAL}.vl-picker-open .vl-actions{display:none}#${MODAL}.vl-picker-open .vl-list{padding:6px}#${MODAL}.vl-picker-open .vl-vote{margin-bottom:8px}#${MODAL}.vl-picker-open .vl-row{grid-template-columns:70px minmax(0,1fr);min-height:42px;padding:7px 10px;gap:8px}#${MODAL}.vl-picker-open .vl-preview,#${MODAL}.vl-picker-open .vl-file-name{display:none}`;
     document.head.appendChild(style);
   }
 
@@ -1600,9 +1657,10 @@
     catch (error) { return alert(`读取所选投票失败：${error.message || error}`); }
     close(); styles();
     const modal = document.createElement('div'); modal.id = MODAL;
-    modal.innerHTML = `<div class="vl-panel"><h3>添加投票选项图片</h3><div class="vl-note">已选择 ${selected.length} 个投票。每个投票一次选择多张图片，图片将按文件选择顺序依次对应第 1、2、3…个选项。</div><div class="vl-list">正在读取投票选项…</div><div class="vl-status"></div><div class="vl-actions"><button class="btn btn-default vl-cancel">取消</button><button class="btn btn-success vl-save" disabled>上传所选图片</button></div></div>`;
+    modal.innerHTML = `<div class="vl-panel"><h3>添加投票选项图片</h3><div class="vl-note">已选择 ${selected.length} 个投票。既可一次选择整个整理文件夹，也可继续为单个投票选择多张图片。</div><div class="vl-folder-picker"><div class="vl-folder-title">批量选择整个文件夹</div><input class="form-control vl-folder-input" type="file" multiple webkitdirectory directory><div class="vl-folder-hint">格式：总文件夹 / 01_投票标题 / 1.jpg、2.jpg……。子文件夹标题匹配投票名称，数字图片名对应选项顺序；匹配和数量确认无误后才可上传。</div></div><div class="vl-list">正在读取投票选项…</div><div class="vl-status"></div><div class="vl-actions"><button class="btn btn-default vl-cancel">取消</button><button class="btn btn-success vl-save" disabled>上传所选图片</button></div></div>`;
     document.body.appendChild(modal);
-    const list = modal.querySelector('.vl-list'), status = modal.querySelector('.vl-status'), saveButton = modal.querySelector('.vl-save'), cancel = modal.querySelector('.vl-cancel');
+    const list = modal.querySelector('.vl-list'), status = modal.querySelector('.vl-status'), saveButton = modal.querySelector('.vl-save'), cancel = modal.querySelector('.vl-cancel'), folderPicker = modal.querySelector('.vl-folder-input'), folderHint = modal.querySelector('.vl-folder-hint');
+    folderPicker.setAttribute('webkitdirectory', '');
     cancel.onclick = close;
     const prepared = [];
     list.replaceChildren();
@@ -1617,7 +1675,7 @@
         const clear = document.createElement('button'); clear.type = 'button'; clear.className = 'btn btn-default btn-sm vl-clear'; clear.textContent = '清除本投票图片';
         const hint = document.createElement('div'); hint.className = 'vl-vote-hint'; hint.textContent = `请选择 ${options.length} 张图片，按选择顺序对应下方 ${options.length} 个选项。`;
         pickerRow.append(picker, clear, hint); block.appendChild(pickerRow);
-        const group = { vote, options, picker, hint, items: [] }; prepared.push(group);
+        const group = { vote, options, picker, hint, items: [], source: '' }; prepared.push(group);
         options.forEach((option, optionIndex) => {
           const row = document.createElement('div'); row.className = 'vl-row';
           const number = document.createElement('div'); number.className = 'vl-index'; number.textContent = `第 ${optionIndex + 1} 张`;
@@ -1628,7 +1686,21 @@
           const item = { vote, option, preview, fileName, file: null, objectUrl: '' }; group.items.push(item);
           row.append(number, name, preview, fileName); block.appendChild(row);
         });
-        const resetGroup = () => group.items.forEach(item => { if (item.objectUrl) URL.revokeObjectURL(item.objectUrl); item.objectUrl = ''; item.file = null; item.preview.src = item.option.image || ''; item.fileName.textContent = '等待选择图片'; });
+        const resetGroup = () => {
+          group.items.forEach(item => { if (item.objectUrl) URL.revokeObjectURL(item.objectUrl); item.objectUrl = ''; item.file = null; item.preview.src = item.option.image || ''; item.fileName.textContent = '等待选择图片'; });
+          group.source = '';
+        };
+        const applyFiles = (files, source) => {
+          resetGroup();
+          const chosen = [...files];
+          group.source = source || '单独选择';
+          group.items.forEach((item, index) => { const file = chosen[index]; if (!file) return; item.file = file; item.objectUrl = URL.createObjectURL(file); item.preview.src = item.objectUrl; item.fileName.textContent = file.name; });
+          hint.textContent = chosen.length === options.length ? `已从${group.source}匹配 ${chosen.length} 张，顺序匹配完成。` : `数量不匹配：需要 ${options.length} 张，${group.source}中有 ${chosen.length} 张。`;
+          hint.style.color = chosen.length === options.length ? '#27864a' : '#d9534f';
+          update();
+        };
+        group.reset = resetGroup;
+        group.applyFiles = applyFiles;
         const restorePickerLayout = () => window.setTimeout(() => modal.classList.remove('vl-picker-open'), 250);
         picker.addEventListener('click', () => {
           modal.classList.add('vl-picker-open');
@@ -1636,19 +1708,67 @@
         });
         picker.onchange = () => {
           restorePickerLayout();
-          resetGroup(); const files = [...(picker.files || [])];
-          group.items.forEach((item, index) => { const file = files[index]; if (!file) return; item.file = file; item.objectUrl = URL.createObjectURL(file); item.preview.src = item.objectUrl; item.fileName.textContent = file.name; });
-          hint.textContent = files.length === options.length ? `已选择 ${files.length} 张，顺序匹配完成。` : `数量不匹配：需要 ${options.length} 张，当前选择 ${files.length} 张。`;
-          hint.style.color = files.length === options.length ? '#27864a' : '#d9534f'; update();
+          applyFiles(picker.files || [], '单独选择');
         };
         clear.onclick = () => { picker.value = ''; resetGroup(); hint.textContent = `请选择 ${options.length} 张图片，按选择顺序对应下方 ${options.length} 个选项。`; hint.style.color = ''; update(); };
       } catch (error) { title.textContent = `${vote.title}（读取失败：${error.message}）`; }
     }
-    const update = () => { const chosen = prepared.filter(group => group.picker.files?.length); const valid = chosen.length > 0 && chosen.every(group => group.picker.files.length === group.options.length); const count = chosen.reduce((sum, group) => sum + group.picker.files.length, 0); saveButton.disabled = !valid; saveButton.textContent = valid ? `按顺序上传 ${count} 张图片` : (chosen.length ? '请修正图片数量' : '请选择图片'); };
+    const update = () => { const chosen = prepared.filter(group => group.items.some(item => item.file)); const valid = chosen.length > 0 && chosen.every(group => group.items.length === group.options.length && group.items.every(item => item.file)); const count = chosen.reduce((sum, group) => sum + group.items.filter(item => item.file).length, 0); saveButton.disabled = !valid; saveButton.textContent = valid ? `按顺序上传 ${count} 张图片` : (chosen.length ? '请修正图片数量' : '请选择图片'); };
+    const restoreFolderPickerLayout = () => window.setTimeout(() => modal.classList.remove('vl-picker-open'), 250);
+    folderPicker.addEventListener('click', () => {
+      modal.classList.add('vl-picker-open');
+      window.addEventListener('focus', restoreFolderPickerLayout, { once: true });
+    });
+    folderPicker.addEventListener('change', () => {
+      restoreFolderPickerLayout();
+      prepared.forEach(group => { group.picker.value = ''; group.reset?.(); });
+      const folders = folderRecords(folderPicker.files || []);
+      const usedGroups = new Set();
+      const matched = [];
+      const unmatched = [];
+      const ambiguous = [];
+      folders.forEach(folder => {
+        const key = normalizedVoteTitle(folder.name);
+        let matchMethod = '标题';
+        let candidates = prepared.filter(group => !usedGroups.has(group) && normalizedVoteTitle(group.vote.title) === key);
+        if (!candidates.length) {
+          const scored = prepared.filter(group => !usedGroups.has(group)).map(group => ({ group, score: titleSimilarity(folder.name, group.vote.title) })).sort((left, right) => right.score - left.score);
+          if (scored[0]?.score >= 0.82 && (!scored[1] || scored[0].score - scored[1].score >= 0.08)) {
+            candidates = [scored[0].group];
+            matchMethod = '标题近似';
+          }
+        }
+        if (!candidates.length && Number.isInteger(folder.order) && folder.order >= 1) {
+          const orderedGroup = prepared[folder.order - 1];
+          if (orderedGroup && !usedGroups.has(orderedGroup)) {
+            candidates = [orderedGroup];
+            matchMethod = '前缀序号';
+          }
+        }
+        if (candidates.length !== 1) {
+          (candidates.length > 1 ? ambiguous : unmatched).push(folder.name);
+          return;
+        }
+        const group = candidates[0];
+        usedGroups.add(group);
+        group.applyFiles(folder.files, `文件夹“${folder.name}”`);
+        matched.push(`${folder.name} → ${group.vote.title}（${matchMethod}匹配，${folder.files.length}/${group.options.length} 张）`);
+      });
+      const missing = prepared.filter(group => !usedGroups.has(group)).map(group => group.vote.title);
+      const lines = [`已读取 ${folders.length} 个投票文件夹，成功匹配 ${matched.length}/${prepared.length} 个所选投票。`, ...matched];
+      if (unmatched.length) lines.push(`未匹配文件夹：${unmatched.join('、')}`);
+      if (ambiguous.length) lines.push(`重复或歧义文件夹：${ambiguous.join('、')}`);
+      if (missing.length) lines.push(`缺少图片文件夹：${missing.join('、')}`);
+      if (!folders.length) lines.push('未读取到“总文件夹/投票子文件夹/图片”结构，请按说明整理后重选。');
+      folderHint.textContent = lines.join('\n');
+      folderHint.style.whiteSpace = 'pre-line';
+      folderHint.style.color = !unmatched.length && !ambiguous.length && !missing.length ? '#27864a' : '#d9534f';
+      update();
+    });
     update();
     saveButton.onclick = async () => {
       if (saveButton.dataset.finished) return location.reload();
-      const groups = prepared.filter(group => group.picker.files?.length); if (!groups.length || groups.some(group => group.picker.files.length !== group.options.length)) return;
+      const groups = prepared.filter(group => group.items.some(item => item.file)); if (!groups.length || groups.some(group => group.items.some(item => !item.file))) return;
       const targets = groups.flatMap(group => group.items.filter(item => item.file));
       saveButton.disabled = true; cancel.disabled = true; prepared.forEach(group => { group.picker.disabled = true; });
       let completed = 0; const failures = [];
