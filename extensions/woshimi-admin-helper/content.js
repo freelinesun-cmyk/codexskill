@@ -1599,15 +1599,17 @@
       : { indexes, error: '' };
   }
 
-  function matchCreatedOptions(beforeRows, afterRows, optionTitles) {
-    const beforeIds = new Set(beforeRows.map(row => row.id));
-    const candidates = afterRows.filter(row => !beforeIds.has(row.id));
-    const used = new Set();
-    return optionTitles.map(title => {
-      const match = candidates.find(row => !used.has(row.id) && row.title === title);
-      if (match) used.add(match.id);
-      return match || null;
-    });
+  function resolveOptionRows(rows, optionTitles) {
+    const resolved = [];
+    for (const title of optionTitles) {
+      const matches = rows.filter(row => row.title === title);
+      if (matches.length !== 1) {
+        const reason = matches.length ? `存在 ${matches.length} 个同名选项` : '没有找到该选项';
+        return { rows: [], error: `选项“${title}”${reason}` };
+      }
+      resolved.push(matches[0]);
+    }
+    return { rows: resolved, error: '' };
   }
 
   function addStyles() {
@@ -1802,6 +1804,7 @@
       summaryTextarea.disabled = true;
       textareas.forEach(textarea => { textarea.disabled = true; });
       let completed = 0;
+      let reused = 0;
       let answersCompleted = 0;
       let processed = 0;
       const failures = [];
@@ -1812,17 +1815,27 @@
         let itemOptionFailed = false;
         if (item.answer && answerState.error) {
           failures.push(`${item.title}（ID：${item.id}）：${answerState.error}`);
-        } else if (item.answer) {
-          try {
-            beforeRows = await loadOptionRecords(item);
-          } catch (error) {
-            itemOptionFailed = true;
-            failures.push(`${item.title}（ID：${item.id}）：创建前读取选项失败，未提交本题答案：${error.message || '读取失败'}`);
-          }
+        }
+        try {
+          beforeRows = await loadOptionRecords(item);
+        } catch (error) {
+          itemOptionFailed = true;
+          failures.push(`${item.title}（ID：${item.id}）：读取现有选项失败，已停止处理本题：${error.message || '读取失败'}`);
         }
         for (const option of item.options) {
           processed += 1;
-          status.textContent = `正在创建 ${processed}/${total}：${item.title}（ID：${item.id}）→ ${option}`;
+          if (itemOptionFailed) continue;
+          const existing = beforeRows.filter(row => row.title === option);
+          status.textContent = `正在同步 ${processed}/${total}：${item.title}（ID：${item.id}）→ ${option}`;
+          if (existing.length === 1) {
+            reused += 1;
+            continue;
+          }
+          if (existing.length > 1) {
+            itemOptionFailed = true;
+            failures.push(`${item.title}（ID：${item.id}）/ ${option}：发现 ${existing.length} 个同名选项，无法安全设置答案`);
+            continue;
+          }
           try {
             await createOption(item, option);
             completed += 1;
@@ -1835,16 +1848,16 @@
           try {
             status.textContent = `正在设置正确答案：${item.title} → ${item.answer}`;
             const afterRows = await loadOptionRecords(item);
-            const createdRows = matchCreatedOptions(beforeRows, afterRows, item.options);
-            if (createdRows.some(row => !row)) throw new Error('无法逐项确认本次新建的选项，未修改任何已有选项');
-            for (let index = 0; index < createdRows.length; index += 1) {
-              await saveOptionAnswer(item, createdRows[index].id, answerState.indexes.includes(index));
+            const resolved = resolveOptionRows(afterRows, item.options);
+            if (resolved.error) throw new Error(resolved.error);
+            const selectedIds = new Set(answerState.indexes.map(index => resolved.rows[index].id));
+            for (const row of afterRows) {
+              const expected = selectedIds.has(row.id);
+              if (row.answer === expected) continue;
+              await saveOptionAnswer(item, row.id, expected);
             }
             const verifiedRows = await loadOptionRecords(item);
-            const verifiedById = new Map(verifiedRows.map(row => [row.id, row]));
-            const verified = createdRows.every((row, index) =>
-              Boolean(verifiedById.get(row.id)?.answer) === answerState.indexes.includes(index)
-            );
+            const verified = verifiedRows.every(row => Boolean(row.answer) === selectedIds.has(row.id));
             if (!verified) throw new Error('后台返回的正确答案状态与提交内容不一致');
             answersCompleted += 1;
           } catch (error) {
@@ -1853,8 +1866,8 @@
         }
       }
       const requestedAnswers = plan.filter(item => item.answer && !getAnswerIndexes(item.answer, item.options.length).error).length;
-      status.textContent = `已创建 ${completed}/${total} 个选项；已设置 ${answersCompleted}/${requestedAnswers} 题正确答案。${failures.length ? `\n失败：${failures.join('\n')}` : ''}`;
-      if (!failures.length && completed > 0) {
+      status.textContent = `选项同步完成：新建 ${completed} 个，复用 ${reused} 个；已设置 ${answersCompleted}/${requestedAnswers} 题正确答案。${failures.length ? `\n失败：${failures.join('\n')}` : ''}`;
+      if (!failures.length && completed + reused > 0) {
         refreshOptionFrames(plan.filter(item => item.options.length).map(item => item.id));
         status.textContent += '\n正在刷新列表……';
         window.setTimeout(refreshList, 350);

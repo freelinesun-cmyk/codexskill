@@ -3,6 +3,18 @@
 本文件记录“我是谜后台辅助工具”的公开版本变化。后续每次发布都应先更新
 `manifest.json` 版本号和本文件，再提交源码、安装包并创建同名 Git 标签。
 
+## [2.5.16] - 2026-09-29
+
+### 修复
+
+- 修复批量添加选项时，若同名选项已由上一次操作创建，因没有产生“新选项 ID”而跳过正确答案设置的问题。
+
+### 调整与校验
+
+- 提交时先读取现有选项：唯一同名选项直接复用，缺少的选项才创建，避免重复添加。
+- 根据汇总文本统一校正该投票全部选项的正确答案状态，保证旧的错误答案会被清除。
+- 若存在多个同名选项、选项读取失败或保存后的回读状态不一致，则停止该题答案设置并显示具体原因。
+
 ## [2.5.15] - 2026-09-29
 
 ### 新增
@@ -110,6 +122,7 @@
 
 - 将线索列表分页逻辑拆分到独立的 `clue.js`，减少与其他页面功能的耦合。
 
+[2.5.16]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.16/extensions/woshimi-admin-helper
 [2.5.15]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.15/extensions/woshimi-admin-helper
 [2.5.14]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.14/extensions/woshimi-admin-helper
 [2.5.13]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.13/extensions/woshimi-admin-helper
