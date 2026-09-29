@@ -1490,7 +1490,7 @@
     };
   }
 
-  async function loadOptionTitles(vote) {
+  async function loadOptionRecords(vote) {
     const query = new URLSearchParams(new URL(vote.listUrl, window.location.origin).search);
     query.set('limit', '1000');
     query.set('offset', '0');
@@ -1507,9 +1507,15 @@
     const payload = await response.json().catch(() => null);
     if (!payload) throw new Error(`校验投票 ID ${vote.id} 失败：返回内容不是 JSON`);
     const rows = Array.isArray(payload) ? payload : (payload.rows || payload.data || []);
-    return rows.map(row => String(
-      row?.title ?? row?.name ?? row?.voteOption ?? row?.optionName ?? ''
-    ).trim()).filter(Boolean);
+    return rows.map(row => ({
+      id: String(row?.id ?? row?.optionId ?? '').trim(),
+      title: String(row?.title ?? row?.name ?? row?.voteOption ?? row?.optionName ?? '').trim(),
+      answer: row?.isAnswer === 1 || row?.isAnswer === '1' || row?.isAnswer === true || row?.isAnswer === '是',
+    })).filter(row => row.id && row.title);
+  }
+
+  async function loadOptionTitles(vote) {
+    return (await loadOptionRecords(vote)).map(row => row.title);
   }
 
   async function verifyOptionCreated(vote, title) {
@@ -1549,6 +1555,59 @@
       throw new Error(payload?.msg || `HTTP ${response.status}`);
     }
     await verifyOptionCreated(vote, title);
+  }
+
+  async function loadOptionEditFields(vote, optionId) {
+    const query = new URLSearchParams(new URL(vote.listUrl, window.location.origin).search);
+    const response = await fetch(`/modules/drama/vote_option/edit/${encodeURIComponent(optionId)}?${query.toString()}`, {
+      credentials: 'same-origin',
+      cache: 'no-store',
+    });
+    const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+    const form = doc.querySelector('form');
+    if (!response.ok || !form) throw new Error(`读取选项 ${optionId} 编辑表单失败`);
+    const body = new URLSearchParams();
+    Array.from(form.elements).forEach(control => appendFormControl(body, control));
+    return body;
+  }
+
+  async function saveOptionAnswer(vote, optionId, answer) {
+    const body = await loadOptionEditFields(vote, optionId);
+    body.set('isAnswer', answer ? '1' : '0');
+    const response = await fetch('/modules/drama/vote_option/edit', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+      body: body.toString(),
+      credentials: 'same-origin',
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || Number(payload.code) !== 0) {
+      throw new Error(payload.msg || `设置选项 ${optionId} 正确答案失败：HTTP ${response.status}`);
+    }
+  }
+
+  function getAnswerIndexes(answer, optionCount) {
+    const letters = Array.from(new Set(String(answer || '').toUpperCase().replace(/[^A-Z]/g, '').split('')));
+    if (!letters.length) return { indexes: [], error: '' };
+    const indexes = letters.map(letter => letter.charCodeAt(0) - 65);
+    const invalid = letters.filter((letter, index) => indexes[index] < 0 || indexes[index] >= optionCount);
+    return invalid.length
+      ? { indexes: [], error: `答案 ${letters.join('')} 超出本题 ${optionCount} 个选项的范围` }
+      : { indexes, error: '' };
+  }
+
+  function matchCreatedOptions(beforeRows, afterRows, optionTitles) {
+    const beforeIds = new Set(beforeRows.map(row => row.id));
+    const candidates = afterRows.filter(row => !beforeIds.has(row.id));
+    const used = new Set();
+    return optionTitles.map(title => {
+      const match = candidates.find(row => !used.has(row.id) && row.title === title);
+      if (match) used.add(match.id);
+      return match || null;
+    });
   }
 
   function addStyles() {
@@ -1612,7 +1671,7 @@
     const heading = document.createElement('h3');
     heading.textContent = '按投票组批量添加选项';
     const note = document.createElement('p');
-    note.textContent = '可将带题号、题目和 A/B/C…选项的完整投票文本一次粘贴到汇总框，系统会按题目标题自动匹配已勾选的投票并分配选项。“答案”标记仅用于识别题目，不会在这里修改正确答案。';
+    note.textContent = '可将带题号、题目、A/B/C…选项和“答案”标记的完整投票文本一次粘贴到汇总框。系统会按题目标题匹配已勾选的投票，创建选项后同步设置正确答案。';
     const summaryBox = document.createElement('div');
     summaryBox.className = 'batch-vote-options-by-pack-summary';
     const summaryLabel = document.createElement('label');
@@ -1627,6 +1686,7 @@
     manualSummary.textContent = '逐个投票校对或手动修正';
     const list = document.createElement('div');
     const textareas = new Map();
+    const answersByVoteId = new Map();
     votes.forEach(vote => {
       const item = document.createElement('div');
       item.className = 'batch-vote-options-by-pack-item';
@@ -1664,6 +1724,7 @@
         voteByTitle.get(key).push(vote);
       });
       textareas.forEach(textarea => { textarea.value = ''; });
+      answersByVoteId.clear();
       const matchedVoteIds = new Set();
       const matched = [];
       const failures = [];
@@ -1684,7 +1745,9 @@
         }
         matchedVoteIds.add(vote.id);
         textareas.get(vote.id).value = question.options.join('\n');
-        matched.push(`${vote.title}：${question.options.length} 个选项${question.answer ? `（检测到答案 ${question.answer}，本步骤不提交答案）` : ''}`);
+        if (question.answer) answersByVoteId.set(vote.id, question.answer);
+        const answerState = getAnswerIndexes(question.answer, question.options.length);
+        matched.push(`${vote.title}：${question.options.length} 个选项${question.answer ? answerState.error ? `（${answerState.error}，不会设置答案）` : `（将设置正确答案 ${question.answer}）` : ''}`);
       });
       const unmatchedVotes = votes.filter(vote => !matchedVoteIds.has(vote.id));
       if (!String(summaryTextarea.value || '').trim()) {
@@ -1703,14 +1766,20 @@
     const getPlan = () => votes.map(vote => ({
       ...vote,
       options: splitOptions(textareas.get(vote.id)?.value || ''),
+      answer: answersByVoteId.get(vote.id) || '',
     }));
     const updatePreview = () => {
       const plan = getPlan();
       const total = plan.reduce((sum, item) => sum + item.options.length, 0);
+      const answerCount = plan.filter(item => item.answer && !getAnswerIndexes(item.answer, item.options.length).error).length;
       preview.textContent = total
-        ? `将创建 ${total} 个选项：\n${plan.filter(item => item.options.length).map(item => `${item.title}：${item.options.join('、')}`).join('\n')}`
+        ? `将创建 ${total} 个选项并设置 ${answerCount} 题正确答案：\n${plan.filter(item => item.options.length).map(item => {
+          const answerState = getAnswerIndexes(item.answer, item.options.length);
+          const answerText = item.answer ? answerState.error ? `；答案未设置：${answerState.error}` : `；正确答案 ${item.answer}` : '';
+          return `${item.title}：${item.options.join('、')}${answerText}`;
+        }).join('\n')}`
         : '请至少为一个投票组输入选项。';
-      confirm.textContent = `确认创建 ${total} 个选项`;
+      confirm.textContent = `确认创建 ${total} 个选项并设置 ${answerCount} 题答案`;
       return plan;
     };
     summaryTextarea.addEventListener('input', () => {
@@ -1733,19 +1802,58 @@
       summaryTextarea.disabled = true;
       textareas.forEach(textarea => { textarea.disabled = true; });
       let completed = 0;
+      let answersCompleted = 0;
+      let processed = 0;
       const failures = [];
       for (const item of plan) {
+        if (!item.options.length) continue;
+        const answerState = getAnswerIndexes(item.answer, item.options.length);
+        let beforeRows = [];
+        let itemOptionFailed = false;
+        if (item.answer && answerState.error) {
+          failures.push(`${item.title}（ID：${item.id}）：${answerState.error}`);
+        } else if (item.answer) {
+          try {
+            beforeRows = await loadOptionRecords(item);
+          } catch (error) {
+            itemOptionFailed = true;
+            failures.push(`${item.title}（ID：${item.id}）：创建前读取选项失败，未提交本题答案：${error.message || '读取失败'}`);
+          }
+        }
         for (const option of item.options) {
-          status.textContent = `正在创建 ${completed + failures.length + 1}/${total}：${item.title}（ID：${item.id}）→ ${option}`;
+          processed += 1;
+          status.textContent = `正在创建 ${processed}/${total}：${item.title}（ID：${item.id}）→ ${option}`;
           try {
             await createOption(item, option);
             completed += 1;
           } catch (error) {
+            itemOptionFailed = true;
             failures.push(`${item.title}（ID：${item.id}）/ ${option}：${error.message || '创建失败'}`);
           }
         }
+        if (item.answer && !answerState.error && !itemOptionFailed) {
+          try {
+            status.textContent = `正在设置正确答案：${item.title} → ${item.answer}`;
+            const afterRows = await loadOptionRecords(item);
+            const createdRows = matchCreatedOptions(beforeRows, afterRows, item.options);
+            if (createdRows.some(row => !row)) throw new Error('无法逐项确认本次新建的选项，未修改任何已有选项');
+            for (let index = 0; index < createdRows.length; index += 1) {
+              await saveOptionAnswer(item, createdRows[index].id, answerState.indexes.includes(index));
+            }
+            const verifiedRows = await loadOptionRecords(item);
+            const verifiedById = new Map(verifiedRows.map(row => [row.id, row]));
+            const verified = createdRows.every((row, index) =>
+              Boolean(verifiedById.get(row.id)?.answer) === answerState.indexes.includes(index)
+            );
+            if (!verified) throw new Error('后台返回的正确答案状态与提交内容不一致');
+            answersCompleted += 1;
+          } catch (error) {
+            failures.push(`${item.title}（ID：${item.id}）正确答案 ${item.answer}：${error.message || '设置失败'}`);
+          }
+        }
       }
-      status.textContent = `已创建 ${completed}/${total} 个选项。${failures.length ? `\n失败：${failures.join('\n')}` : ''}`;
+      const requestedAnswers = plan.filter(item => item.answer && !getAnswerIndexes(item.answer, item.options.length).error).length;
+      status.textContent = `已创建 ${completed}/${total} 个选项；已设置 ${answersCompleted}/${requestedAnswers} 题正确答案。${failures.length ? `\n失败：${failures.join('\n')}` : ''}`;
       if (!failures.length && completed > 0) {
         refreshOptionFrames(plan.filter(item => item.options.length).map(item => item.id));
         status.textContent += '\n正在刷新列表……';
