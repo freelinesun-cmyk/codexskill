@@ -1447,6 +1447,11 @@
     return new Promise(resolve => window.setTimeout(resolve, milliseconds));
   }
 
+  // 后台对同一保存接口可能启用了重复提交保护。批量创建时记住已经探测到的
+  // 最小提交间隔，后续选项主动等待，避免只有第一条真正落库。
+  let optionCreateCooldownMs = 0;
+  let lastOptionCreateAttemptAt = 0;
+
   function appendFormControl(body, control) {
     if (!control.name || control.disabled) return;
     if ((control.type === 'checkbox' || control.type === 'radio') && !control.checked) return;
@@ -1494,6 +1499,7 @@
     const query = new URLSearchParams(new URL(vote.listUrl, window.location.origin).search);
     query.set('limit', '1000');
     query.set('offset', '0');
+    query.set('_batchRead', `${Date.now()}-${Math.random().toString(36).slice(2)}`);
     const response = await fetch(`/modules/drama/vote_option/list?${query.toString()}`, {
       method: 'POST',
       headers: {
@@ -1514,23 +1520,38 @@
     })).filter(row => row.id && row.title);
   }
 
-  async function loadOptionTitles(vote) {
-    return (await loadOptionRecords(vote)).map(row => row.title);
-  }
-
-  async function verifyOptionCreated(vote, title) {
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      if (attempt) await delay(250);
-      const titles = await loadOptionTitles(vote);
-      if (titles.includes(title)) return;
+  function findUniqueOptionRow(rows, title, voteId) {
+    const matches = rows.filter(row => row.title === title);
+    if (matches.length > 1) {
+      throw new Error(`投票 ID ${voteId} 下存在 ${matches.length} 个同名选项“${title}”`);
     }
-    throw new Error(`后台未在投票 ID ${vote.id} 下找到新选项`);
+    return matches[0] || null;
   }
 
-  async function createOption(vote, title) {
+  async function waitForOptionRow(vote, title) {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      if (attempt) await delay(Math.min(300 + attempt * 150, 900));
+      const row = findUniqueOptionRow(await loadOptionRecords(vote), title, vote.id);
+      if (row) return row;
+    }
+    return null;
+  }
+
+  async function waitForOptionCreateWindow() {
+    if (!optionCreateCooldownMs || !lastOptionCreateAttemptAt) return;
+    const remaining = optionCreateCooldownMs - (Date.now() - lastOptionCreateAttemptAt);
+    if (remaining > 0) await delay(remaining);
+  }
+
+  function isTransientOptionCreateError(message) {
+    return /重复|频繁|稍候|过快|繁忙|处理中|repeat|too\s*many|busy/i.test(String(message || ''));
+  }
+
+  async function postOption(vote, title) {
     const formConfig = await loadCreateForm(vote);
     const body = new URLSearchParams(formConfig.body);
     body.set('title', title);
+    lastOptionCreateAttemptAt = Date.now();
     const response = await fetch(formConfig.actionUrl, {
       method: 'POST',
       headers: {
@@ -1539,6 +1560,7 @@
       },
       body: body.toString(),
       credentials: 'same-origin',
+      cache: 'no-store',
     });
     const responseText = await response.text();
     let payload = null;
@@ -1551,10 +1573,36 @@
       ? null
       : Number(payload.code);
     const success = response.ok && (code === null || code === 0 || code === 200);
-    if (!success) {
-      throw new Error(payload?.msg || `HTTP ${response.status}`);
+    if (!success) throw new Error(payload?.msg || `HTTP ${response.status}`);
+  }
+
+  async function createOption(vote, title) {
+    let lastError = null;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      // 每次真正提交前都重新读取。若上一请求虽然返回异常但稍后落库，直接复用，
+      // 绝不再次创建同名选项。
+      let existing = findUniqueOptionRow(await loadOptionRecords(vote), title, vote.id);
+      if (existing) return { row: existing, reused: true };
+
+      await waitForOptionCreateWindow();
+      existing = findUniqueOptionRow(await loadOptionRecords(vote), title, vote.id);
+      if (existing) return { row: existing, reused: true };
+
+      try {
+        await postOption(vote, title);
+        const created = await waitForOptionRow(vote, title);
+        if (!created) throw new Error(`后台返回成功，但回读时未找到选项“${title}”`);
+        return { row: created, reused: false };
+      } catch (error) {
+        lastError = error;
+        const transient = isTransientOptionCreateError(error?.message)
+          || /回读时未找到/.test(String(error?.message || ''));
+        if (!transient || attempt === 3) break;
+        // 第一次先按常见的 1 秒保护间隔重试；若仍被拦截，则提升到 5.2 秒。
+        optionCreateCooldownMs = Math.max(optionCreateCooldownMs, attempt === 0 ? 1200 : 5200);
+      }
     }
-    await verifyOptionCreated(vote, title);
+    throw new Error(`选项“${title}”连续提交失败：${lastError?.message || '未知错误'}`);
   }
 
   async function loadOptionEditFields(vote, optionId) {
@@ -1837,8 +1885,10 @@
             continue;
           }
           try {
-            await createOption(item, option);
-            completed += 1;
+            const result = await createOption(item, option);
+            beforeRows.push(result.row);
+            if (result.reused) reused += 1;
+            else completed += 1;
           } catch (error) {
             itemOptionFailed = true;
             failures.push(`${item.title}（ID：${item.id}）/ ${option}：${error.message || '创建失败'}`);
