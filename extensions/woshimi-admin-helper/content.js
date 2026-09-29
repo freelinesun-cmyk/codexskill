@@ -1464,7 +1464,7 @@
     return String(value || '')
       .normalize('NFKC')
       .replace(/^\s*\d+\s*[_\-—.、]\s*/, '')
-      .replace(/[（(]\s*多选\s*[）)]\s*$/i, '')
+      .replace(/[（(]\s*(?:多选|不定项)\s*[）)]\s*$/i, '')
       .replace(/[\s\p{P}\p{S}]+/gu, '')
       .toLowerCase();
   }
@@ -7322,7 +7322,12 @@
       #${MODAL_ID} .batch-vote-config-role-section { margin-top: 14px; }
       #${MODAL_ID} .batch-vote-config-role-title { margin: 0 0 8px; font-size: 16px; color: #333; }
       #${MODAL_ID} .batch-vote-config-role-note { margin: 0 0 10px; color: #666; line-height: 1.6; }
+      #${MODAL_ID} .batch-vote-config-role-all { margin: 0 0 12px; padding: 11px 13px; border: 1px solid #b8d9f2; border-radius: 5px; background: #eef8ff; }
+      #${MODAL_ID} .batch-vote-config-role-all label { display: inline-flex; align-items: center; gap: 7px; margin: 0; color: #245b88; font-weight: 700; cursor: pointer; }
+      #${MODAL_ID} .batch-vote-config-role-all input { margin: 0; }
+      #${MODAL_ID} .batch-vote-config-role-all small { display: block; margin-top: 5px; color: #54758e; }
       #${MODAL_ID} .batch-vote-config-role-list { display: grid; gap: 10px; }
+      #${MODAL_ID} .batch-vote-config-role-list.is-disabled { opacity: .45; }
       #${MODAL_ID} .batch-vote-config-role-card { padding: 12px; border: 1px solid #dfe6ee; border-radius: 5px; background: #fafcff; }
       #${MODAL_ID} .batch-vote-config-role-card strong { display: block; margin-bottom: 8px; color: #333; }
       #${MODAL_ID} .batch-vote-config-role-options { display: flex; flex-wrap: wrap; gap: 7px 16px; }
@@ -7345,9 +7350,9 @@
     else window.location.reload();
   }
 
-  // 标题以“（多选）”“(多选)”或“多选”收尾时，保留标题原文但应用多选配置。
+  // 标题以“（多选）”“（不定项）”或对应无括号文字收尾时，保留标题原文但应用多选配置。
   function isMultipleChoiceTitle(title) {
-    return /(?:[（(]\s*多选\s*[）)]|多选)\s*$/.test(title);
+    return /(?:[（(]\s*(?:多选|不定项)\s*[）)]|多选|不定项)\s*$/.test(title);
   }
 
   function getVoteSettings(title, config) {
@@ -7390,12 +7395,15 @@
     }).filter(item => item.field && item.value && item.name);
     if (!roles.length) throw new Error('投票配置页未找到“公共/角色”勾选项');
 
-    const getOptionValue = (fieldName, optionText) => Array.from(doc.querySelectorAll(`select[name="${fieldName}"] option`))
+    const getOptionValue = (fieldName, optionText) => Array.from(doc.querySelectorAll(`select[name="${fieldName}"], select[name$="[${fieldName}]"]`))
+      .flatMap(select => Array.from(select.options || []))
       .find(option => option.textContent.replace(/\s+/g, '').includes(optionText))?.value || '';
     return {
       roles,
-      multiType: getOptionValue('type', '多选'),
-      multiScoreStrategy: getOptionValue('scoreStrategy', '多选全匹配'),
+      // 得分策略是后台在选择“多选”后动态注入的；直接读取新增页 HTML 时可能尚不存在。
+      // 当前后台固定值与普通题的 0/0 对应，多选/多选全匹配使用 1/1。
+      multiType: getOptionValue('type', '多选') || '1',
+      multiScoreStrategy: getOptionValue('scoreStrategy', '多选全匹配') || '1',
     };
   }
 
@@ -7444,10 +7452,10 @@
     const heading = document.createElement('h3');
     heading.textContent = '批量添加投票';
     const note = document.createElement('p');
-    note.textContent = '先输入投票名称，再为每个投票勾选“公共/角色”关联，最后一次性提交。标题末尾标注“（多选）”或“多选”时，将自动创建多选题。空行会忽略，重复名称会自动合并。';
+    note.textContent = '先输入投票名称，再为每个投票勾选“公共/角色”关联，最后一次性提交。标题末尾标注“（多选）”“多选”“（不定项）”或“不定项”时，将自动创建多选题。空行会忽略，重复名称会自动合并。';
     const defaults = document.createElement('div');
     defaults.className = 'batch-vote-config-defaults';
-    defaults.textContent = '默认配置：展示样式“带图”、展示问题结果“是”。普通题：1分、单选、独立计分；标题末尾标“（多选）”的题目：2分、多选、多选全匹配。可在下一步按投票设置“公共/角色”关联；配图、投票动作、说明、筛选条件等其余配置均不填写。';
+    defaults.textContent = '默认配置：展示样式“带图”、展示问题结果“是”。普通题：1分、单选、独立计分；标题末尾标“（多选）”或“（不定项）”的题目：2分、多选、多选全匹配。可在下一步按投票设置“公共/角色”关联；配图、投票动作、说明、筛选条件等其余配置均不填写。';
     const textarea = document.createElement('textarea');
     textarea.placeholder = '例如：\n一号客人的癖好为？\n二号客人的癖好为？\n三号客人的癖好为？';
     const preview = document.createElement('div');
@@ -7461,9 +7469,20 @@
     const roleNote = document.createElement('p');
     roleNote.className = 'batch-vote-config-role-note';
     roleNote.textContent = '不勾选则保持不关联。每个投票可独立勾选公共角色或指定角色。';
+    const roleAll = document.createElement('div');
+    roleAll.className = 'batch-vote-config-role-all';
+    const roleAllLabel = document.createElement('label');
+    const roleAllCheckbox = document.createElement('input');
+    roleAllCheckbox.type = 'checkbox';
+    const roleAllText = document.createElement('span');
+    roleAllText.textContent = '关联所有角色';
+    const roleAllHint = document.createElement('small');
+    roleAllHint.textContent = '勾选后，每个新投票都会自动关联当前剧本的全部具体角色；下方逐题选项无需勾选。公共角色不在此范围内。';
+    roleAllLabel.append(roleAllCheckbox, roleAllText);
+    roleAll.append(roleAllLabel, roleAllHint);
     const roleList = document.createElement('div');
     roleList.className = 'batch-vote-config-role-list';
-    roleSection.append(roleTitle, roleNote, roleList);
+    roleSection.append(roleTitle, roleNote, roleAll, roleList);
     const status = document.createElement('div');
     status.className = 'batch-vote-config-status';
     const actions = document.createElement('div');
@@ -7490,12 +7509,28 @@
     textarea.addEventListener('input', updatePreview);
     cancel.addEventListener('click', closeModal);
 
-    const getSelections = title => Array.from(roleList.querySelectorAll('input[data-vote-title]:checked'))
-      .filter(input => input.dataset.voteTitle === title)
-      .map(input => ({
-        field: input.dataset.field,
-        value: input.value,
-      }));
+    const getSelections = title => {
+      if (roleAllCheckbox.checked) {
+        return voteConfig.roles
+          .filter(role => !/公共\s*角色/.test(role.name))
+          .map(role => ({ field: role.field, value: role.value }));
+      }
+      return Array.from(roleList.querySelectorAll('input[data-vote-title]:checked'))
+        .filter(input => input.dataset.voteTitle === title)
+        .map(input => ({
+          field: input.dataset.field,
+          value: input.value,
+        }));
+    };
+
+    roleAllCheckbox.addEventListener('change', () => {
+      const checked = roleAllCheckbox.checked;
+      roleList.classList.toggle('is-disabled', checked);
+      roleList.querySelectorAll('input[data-vote-title]').forEach(input => { input.disabled = checked; });
+      roleNote.textContent = checked
+        ? '已选择关联所有角色：提交时每个投票都会关联全部具体角色，无需操作下方选项。'
+        : '不勾选则保持不关联。每个投票可独立勾选公共角色或指定角色。';
+    });
 
     const renderRoleSelections = () => {
       roleList.replaceChildren();
@@ -7546,7 +7581,7 @@
           textarea.disabled = true;
           roleSection.hidden = false;
           renderRoleSelections();
-          preview.textContent = `已导入 ${titles.length} 个投票名称，请分别设置角色关联后确认提交。`;
+          preview.textContent = `已导入 ${titles.length} 个投票名称。可选择“关联所有角色”，或分别设置每个投票的角色关联后确认提交。`;
           status.textContent = '';
           confirm.textContent = `确认创建 ${titles.length} 个投票`;
         } catch (error) {

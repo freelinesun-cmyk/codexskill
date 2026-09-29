@@ -3,6 +3,20 @@
 本文件记录“我是谜后台辅助工具”的公开版本变化。后续每次发布都应先更新
 `manifest.json` 版本号和本文件，再提交源码、安装包并创建同名 Git 标签。
 
+## [2.5.12] - 2026-09-29
+
+### 新增
+
+- 批量添加投票的角色关联步骤新增顶部“关联所有角色”选项。
+
+### 交互
+
+- 勾选后，下方逐题的公共角色与具体角色复选框会禁用并变灰，无需再逐项选择。
+- 提交时，每个新投票会自动关联当前剧本的全部具体角色；“公共角色”不在自动关联范围内。
+- 不勾选时保持原有逐题设置逻辑。
+- 兼容后台仅在选择“多选”后动态加载“多选全匹配”的表单，避免多选题进入角色关联步骤时报配置缺失。
+- 批量添加投票时，标题末尾标注“多选”或“不定项”都会统一按 2 分、多选、多选全匹配创建。
+
 ## [2.5.11] - 2026-09-28
 
 ### 新增
@@ -59,6 +73,7 @@
 
 - 将线索列表分页逻辑拆分到独立的 `clue.js`，减少与其他页面功能的耦合。
 
+[2.5.12]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.12/extensions/woshimi-admin-helper
 [2.5.11]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.11/extensions/woshimi-admin-helper
 [2.5.10]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.10/extensions/woshimi-admin-helper
 [2.5.9]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.9/extensions/woshimi-admin-helper
