@@ -3,6 +3,13 @@
 本文件记录“我是谜后台辅助工具”的公开版本变化。后续每次发布都应先更新
 `manifest.json` 版本号和本文件，再提交源码、安装包并创建同名 Git 标签。
 
+## [2.5.19] - 2026-09-29
+
+### 修复
+
+- 修复批量添加多选或不定项投票时，“得分策略”未正确保存为“多选全匹配”的问题。
+- 按后台真实表单值将“多选全匹配”修正为 `scoreStrategy=2`；多选形式仍为 `type=1`、默认分数仍为 2 分。
+
 ## [2.5.18] - 2026-09-29
 
 ### 根因修复
@@ -149,6 +156,9 @@
 
 - 将线索列表分页逻辑拆分到独立的 `clue.js`，减少与其他页面功能的耦合。
 
+[2.5.19]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.19/extensions/woshimi-admin-helper
+[2.5.18]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.18/extensions/woshimi-admin-helper
+[2.5.17]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.17/extensions/woshimi-admin-helper
 [2.5.16]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.16/extensions/woshimi-admin-helper
 [2.5.15]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.15/extensions/woshimi-admin-helper
 [2.5.14]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.14/extensions/woshimi-admin-helper

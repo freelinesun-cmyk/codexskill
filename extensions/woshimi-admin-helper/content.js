@@ -7953,9 +7953,9 @@
     return {
       roles,
       // 得分策略是后台在选择“多选”后动态注入的；直接读取新增页 HTML 时可能尚不存在。
-      // 当前后台固定值与普通题的 0/0 对应，多选/多选全匹配使用 1/1。
+      // 当前后台固定值：投票形式“多选”=1，得分策略“多选全匹配”=2。
       multiType: getOptionValue('type', '多选') || '1',
-      multiScoreStrategy: getOptionValue('scoreStrategy', '多选全匹配') || '1',
+      multiScoreStrategy: getOptionValue('scoreStrategy', '多选全匹配') || '2',
     };
   }
 
