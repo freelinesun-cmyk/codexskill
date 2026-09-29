@@ -1179,6 +1179,78 @@
     return result;
   }
 
+  function normalizeVoteTitle(value) {
+    return String(value || '')
+      .normalize('NFKC')
+      .replace(/^\s*\d+\s*[.．、)）]\s*/, '')
+      .replace(/[（(]\s*答案\s*[:：]\s*[A-Za-z]+\s*[）)]/gi, '')
+      .replace(/[\s\p{P}\p{S}]+/gu, '')
+      .toLowerCase();
+  }
+
+  function parseSummaryOptionText(text) {
+    const source = String(text || '').replace(/\r\n?/g, '\n').trim();
+    if (!source) return [];
+    const options = [];
+    const seen = new Set();
+    const pattern = /(?:^|\s)([A-Z])\s*[.．、:：)）]\s*([\s\S]*?)(?=(?:\s+[A-Z]\s*[.．、:：)）]\s*)|$)/g;
+    let match;
+    while ((match = pattern.exec(source))) {
+      const value = match[2].replace(/\s+/g, ' ').trim();
+      if (value && !seen.has(value)) {
+        seen.add(value);
+        options.push(value);
+      }
+    }
+    return options.length ? options : splitOptions(source);
+  }
+
+  function parseSummaryQuestions(text) {
+    const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+    const questions = [];
+    let current = null;
+    const finishCurrent = () => {
+      if (!current) return;
+      current.rawTitle = current.rawTitle.trim();
+      current.title = current.rawTitle
+        .replace(/[（(]\s*答案\s*[:：]\s*([A-Za-z]+)\s*[）)]/gi, (_, answer) => {
+          current.answer = String(answer || '').toUpperCase();
+          return '';
+        })
+        .replace(/\s+/g, ' ')
+        .trim();
+      current.options = parseSummaryOptionText(current.optionLines.join('\n'));
+      questions.push(current);
+      current = null;
+    };
+
+    lines.forEach(line => {
+      const questionMatch = line.match(/^\s*(\d+)\s*[.．、)）]\s*(.+?)\s*$/);
+      if (questionMatch) {
+        finishCurrent();
+        let remainder = questionMatch[2].trim();
+        let inlineOptions = '';
+        const inlineOptionMatch = remainder.match(/\s([A-Z]\s*[.．、:：)）]\s*.+)$/);
+        if (inlineOptionMatch) {
+          inlineOptions = inlineOptionMatch[1];
+          remainder = remainder.slice(0, inlineOptionMatch.index).trim();
+        }
+        current = {
+          number: Number(questionMatch[1]),
+          rawTitle: remainder,
+          title: '',
+          answer: '',
+          optionLines: inlineOptions ? [inlineOptions] : [],
+          options: [],
+        };
+        return;
+      }
+      if (current && line.trim()) current.optionLines.push(line.trim());
+    });
+    finishCurrent();
+    return questions;
+  }
+
   function delay(milliseconds) {
     return new Promise(resolve => window.setTimeout(resolve, milliseconds));
   }
@@ -1296,6 +1368,12 @@
       #${MODAL_ID} .batch-vote-options-by-pack-panel { width: min(820px, calc(100vw - 36px)); max-height: calc(100vh - 48px); overflow: auto; padding: 20px; border-radius: 5px; background: #fff; box-shadow: 0 12px 32px rgba(0,0,0,.3); }
       #${MODAL_ID} h3 { margin: 0 0 12px; font-size: 20px; }
       #${MODAL_ID} p { color: #666; line-height: 1.6; }
+      #${MODAL_ID} .batch-vote-options-by-pack-summary { margin-top: 12px; padding: 12px; border: 1px solid #b9d8ee; border-radius: 5px; background: #f4fbff; }
+      #${MODAL_ID} .batch-vote-options-by-pack-summary label { display: block; margin-bottom: 7px; color: #255f86; font-weight: 600; }
+      #${MODAL_ID} .batch-vote-options-by-pack-summary textarea { min-height: 220px; background: #fff; }
+      #${MODAL_ID} .batch-vote-options-by-pack-match { margin-top: 8px; color: #337ab7; white-space: pre-line; line-height: 1.6; }
+      #${MODAL_ID} details { margin-top: 12px; }
+      #${MODAL_ID} details > summary { cursor: pointer; color: #337ab7; font-weight: 600; }
       #${MODAL_ID} .batch-vote-options-by-pack-item { margin-top: 12px; padding: 12px; border: 1px solid #dfe6ee; border-radius: 5px; }
       #${MODAL_ID} .batch-vote-options-by-pack-title { display: block; margin-bottom: 7px; color: #333; font-weight: 600; }
       #${MODAL_ID} textarea { box-sizing: border-box; width: 100%; min-height: 86px; resize: vertical; padding: 8px 10px; border: 1px solid #ccd6e0; border-radius: 4px; line-height: 1.6; }
@@ -1342,7 +1420,19 @@
     const heading = document.createElement('h3');
     heading.textContent = '按投票组批量添加选项';
     const note = document.createElement('p');
-    note.textContent = '每个投票组单独填写选项，支持一行一个，也支持空格、逗号、顿号、中文或英文分号横排输入；支持 A选项、B选项、C选项 这种无空格格式，会自动去除序号、忽略空行并合并重复项。';
+    note.textContent = '可将带题号、题目和 A/B/C…选项的完整投票文本一次粘贴到汇总框，系统会按题目标题自动匹配已勾选的投票并分配选项。“答案”标记仅用于识别题目，不会在这里修改正确答案。';
+    const summaryBox = document.createElement('div');
+    summaryBox.className = 'batch-vote-options-by-pack-summary';
+    const summaryLabel = document.createElement('label');
+    summaryLabel.textContent = '汇总输入（推荐）';
+    const summaryTextarea = document.createElement('textarea');
+    summaryTextarea.placeholder = '例如：\n1.谁的死亡时间区间与其他人不同？（答案：D）\nA.陈霁  B.汪宁  C.任也容  D.余江\n2.凶手使用了哪些东西？（不定项）（答案：AC）\nA.房间雕像  B.房间时钟  C.房间钥匙';
+    const matchStatus = document.createElement('div');
+    matchStatus.className = 'batch-vote-options-by-pack-match';
+    summaryBox.append(summaryLabel, summaryTextarea, matchStatus);
+    const manualDetails = document.createElement('details');
+    const manualSummary = document.createElement('summary');
+    manualSummary.textContent = '逐个投票校对或手动修正';
     const list = document.createElement('div');
     const textareas = new Map();
     votes.forEach(vote => {
@@ -1357,6 +1447,7 @@
       item.append(label, textarea);
       list.appendChild(item);
     });
+    manualDetails.append(manualSummary, list);
     const preview = document.createElement('div');
     preview.className = 'batch-vote-options-by-pack-preview';
     const status = document.createElement('div');
@@ -1372,6 +1463,51 @@
     confirm.className = 'btn btn-danger';
     confirm.textContent = '确认创建 0 个选项';
 
+    const assignSummary = () => {
+      const questions = parseSummaryQuestions(summaryTextarea.value);
+      const voteByTitle = new Map();
+      votes.forEach(vote => {
+        const key = normalizeVoteTitle(vote.title);
+        if (!voteByTitle.has(key)) voteByTitle.set(key, []);
+        voteByTitle.get(key).push(vote);
+      });
+      textareas.forEach(textarea => { textarea.value = ''; });
+      const matchedVoteIds = new Set();
+      const matched = [];
+      const failures = [];
+      questions.forEach(question => {
+        if (!question.title) {
+          failures.push(`第 ${question.number} 题：未识别到题目标题`);
+          return;
+        }
+        if (!question.options.length) {
+          failures.push(`${question.title}：未识别到 A/B/C…选项`);
+          return;
+        }
+        const candidates = voteByTitle.get(normalizeVoteTitle(question.title)) || [];
+        const vote = candidates.find(item => !matchedVoteIds.has(item.id));
+        if (!vote) {
+          failures.push(`${question.title}：未在已勾选投票中找到同名题目`);
+          return;
+        }
+        matchedVoteIds.add(vote.id);
+        textareas.get(vote.id).value = question.options.join('\n');
+        matched.push(`${vote.title}：${question.options.length} 个选项${question.answer ? `（检测到答案 ${question.answer}，本步骤不提交答案）` : ''}`);
+      });
+      const unmatchedVotes = votes.filter(vote => !matchedVoteIds.has(vote.id));
+      if (!String(summaryTextarea.value || '').trim()) {
+        matchStatus.textContent = '粘贴汇总内容后，将自动匹配并填充下方各投票。';
+      } else {
+        matchStatus.textContent = [
+          `已匹配 ${matched.length}/${votes.length} 个已勾选投票。`,
+          ...matched.map(item => `✓ ${item}`),
+          ...failures.map(item => `未匹配：${item}`),
+          ...unmatchedVotes.map(vote => `待填写：${vote.title}`),
+        ].join('\n');
+      }
+      return { questions, matched, failures, unmatchedVotes };
+    };
+
     const getPlan = () => votes.map(vote => ({
       ...vote,
       options: splitOptions(textareas.get(vote.id)?.value || ''),
@@ -1385,6 +1521,10 @@
       confirm.textContent = `确认创建 ${total} 个选项`;
       return plan;
     };
+    summaryTextarea.addEventListener('input', () => {
+      assignSummary();
+      updatePreview();
+    });
     textareas.forEach(textarea => textarea.addEventListener('input', updatePreview));
     cancel.addEventListener('click', closeModal);
     confirm.addEventListener('click', async () => {
@@ -1398,6 +1538,7 @@
       if (!total) return;
       confirm.disabled = true;
       cancel.disabled = true;
+      summaryTextarea.disabled = true;
       textareas.forEach(textarea => { textarea.disabled = true; });
       let completed = 0;
       const failures = [];
@@ -1425,10 +1566,11 @@
       confirm.dataset.completed = String(completed);
     });
     actions.append(cancel, confirm);
-    panel.append(heading, note, list, preview, status, actions);
+    panel.append(heading, note, summaryBox, manualDetails, preview, status, actions);
     modal.appendChild(panel);
     modal.addEventListener('click', event => { if (event.target === modal && !confirm.disabled) closeModal(); });
     document.body.appendChild(modal);
+    assignSummary();
     updatePreview();
   }
 
@@ -1442,7 +1584,7 @@
     button.setAttribute(BUTTON_ATTRIBUTE, 'true');
     button.style.marginLeft = '8px';
     button.textContent = '按投票批量添加选项';
-    button.title = '勾选投票组后分别填写并批量添加选项';
+    button.title = '勾选投票后粘贴完整题目与选项，自动匹配并批量添加';
     button.addEventListener('click', openModal);
     addButton.insertAdjacentElement('afterend', button);
   }
