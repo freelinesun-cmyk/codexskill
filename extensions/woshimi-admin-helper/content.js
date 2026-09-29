@@ -1451,6 +1451,8 @@
   // 最小提交间隔，后续选项主动等待，避免只有第一条真正落库。
   let optionCreateCooldownMs = 0;
   let lastOptionCreateAttemptAt = 0;
+  let optionAnswerCooldownMs = 0;
+  let lastOptionAnswerAttemptAt = 0;
 
   function appendFormControl(body, control) {
     if (!control.name || control.disabled) return;
@@ -1497,15 +1499,13 @@
 
   async function loadOptionRecords(vote) {
     const query = new URLSearchParams(new URL(vote.listUrl, window.location.origin).search);
-    query.set('limit', '1000');
-    query.set('offset', '0');
-    query.set('_batchRead', `${Date.now()}-${Math.random().toString(36).slice(2)}`);
     const response = await fetch(`/modules/drama/vote_option/list?${query.toString()}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
         'X-Requested-With': 'XMLHttpRequest',
       },
+      body: new URLSearchParams({ pageSize: '1000', pageNum: '1', isAsc: 'asc' }).toString(),
       credentials: 'same-origin',
       cache: 'no-store',
     });
@@ -1513,28 +1513,31 @@
     const payload = await response.json().catch(() => null);
     if (!payload) throw new Error(`校验投票 ID ${vote.id} 失败：返回内容不是 JSON`);
     const rows = Array.isArray(payload) ? payload : (payload.rows || payload.data || []);
+    const plainTitle = value => {
+      const raw = String(value ?? '').trim();
+      if (!raw) return '';
+      const doc = new DOMParser().parseFromString(`<body>${raw}</body>`, 'text/html');
+      return String(doc.body?.textContent || raw).trim();
+    };
     return rows.map(row => ({
       id: String(row?.id ?? row?.optionId ?? '').trim(),
-      title: String(row?.title ?? row?.name ?? row?.voteOption ?? row?.optionName ?? '').trim(),
+      // 后台列表会把标题包装成带颜色的 <span>，比较前必须还原为纯文本。
+      title: plainTitle(row?.title ?? row?.name ?? row?.voteOption ?? row?.optionName ?? ''),
       answer: row?.isAnswer === 1 || row?.isAnswer === '1' || row?.isAnswer === true || row?.isAnswer === '是',
     })).filter(row => row.id && row.title);
   }
 
-  function findUniqueOptionRow(rows, title, voteId) {
-    const matches = rows.filter(row => row.title === title);
-    if (matches.length > 1) {
-      throw new Error(`投票 ID ${voteId} 下存在 ${matches.length} 个同名选项“${title}”`);
-    }
-    return matches[0] || null;
+  function findOptionRows(rows, title) {
+    return rows.filter(row => row.title === title);
   }
 
-  async function waitForOptionRow(vote, title) {
+  async function waitForOptionRows(vote, title) {
     for (let attempt = 0; attempt < 8; attempt += 1) {
       if (attempt) await delay(Math.min(300 + attempt * 150, 900));
-      const row = findUniqueOptionRow(await loadOptionRecords(vote), title, vote.id);
-      if (row) return row;
+      const matches = findOptionRows(await loadOptionRecords(vote), title);
+      if (matches.length) return matches;
     }
-    return null;
+    return [];
   }
 
   async function waitForOptionCreateWindow() {
@@ -1581,22 +1584,22 @@
     for (let attempt = 0; attempt < 4; attempt += 1) {
       // 每次真正提交前都重新读取。若上一请求虽然返回异常但稍后落库，直接复用，
       // 绝不再次创建同名选项。
-      let existing = findUniqueOptionRow(await loadOptionRecords(vote), title, vote.id);
-      if (existing) return { row: existing, reused: true };
+      let existing = findOptionRows(await loadOptionRecords(vote), title);
+      if (existing.length) return { rows: existing, reused: true };
 
       await waitForOptionCreateWindow();
-      existing = findUniqueOptionRow(await loadOptionRecords(vote), title, vote.id);
-      if (existing) return { row: existing, reused: true };
+      existing = findOptionRows(await loadOptionRecords(vote), title);
+      if (existing.length) return { rows: existing, reused: true };
 
       try {
         await postOption(vote, title);
-        const created = await waitForOptionRow(vote, title);
-        if (!created) throw new Error(`后台返回成功，但回读时未找到选项“${title}”`);
-        return { row: created, reused: false };
+        const created = await waitForOptionRows(vote, title);
+        // 保存接口已经明确返回成功后，即使列表暂时不可见也绝不重复提交。
+        // 后台列表存在可见延迟，再次 POST 会制造同名重复项。
+        return { rows: created, reused: false, pendingReadback: !created.length };
       } catch (error) {
         lastError = error;
-        const transient = isTransientOptionCreateError(error?.message)
-          || /回读时未找到/.test(String(error?.message || ''));
+        const transient = isTransientOptionCreateError(error?.message);
         if (!transient || attempt === 3) break;
         // 第一次先按常见的 1 秒保护间隔重试；若仍被拦截，则提升到 5.2 秒。
         optionCreateCooldownMs = Math.max(optionCreateCooldownMs, attempt === 0 ? 1200 : 5200);
@@ -1620,21 +1623,38 @@
   }
 
   async function saveOptionAnswer(vote, optionId, answer) {
-    const body = await loadOptionEditFields(vote, optionId);
-    body.set('isAnswer', answer ? '1' : '0');
-    const response = await fetch('/modules/drama/vote_option/edit', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'X-Requested-With': 'XMLHttpRequest',
-      },
-      body: body.toString(),
-      credentials: 'same-origin',
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok || Number(payload.code) !== 0) {
-      throw new Error(payload.msg || `设置选项 ${optionId} 正确答案失败：HTTP ${response.status}`);
+    let lastError = null;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      if (optionAnswerCooldownMs && lastOptionAnswerAttemptAt) {
+        const remaining = optionAnswerCooldownMs - (Date.now() - lastOptionAnswerAttemptAt);
+        if (remaining > 0) await delay(remaining);
+      }
+      try {
+        const body = await loadOptionEditFields(vote, optionId);
+        body.set('isAnswer', answer ? '1' : '0');
+        lastOptionAnswerAttemptAt = Date.now();
+        const response = await fetch('/modules/drama/vote_option/edit', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+            'X-Requested-With': 'XMLHttpRequest',
+          },
+          body: body.toString(),
+          credentials: 'same-origin',
+          cache: 'no-store',
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || Number(payload.code) !== 0) {
+          throw new Error(payload.msg || `HTTP ${response.status}`);
+        }
+        return;
+      } catch (error) {
+        lastError = error;
+        if (!isTransientOptionCreateError(error?.message) || attempt === 3) break;
+        optionAnswerCooldownMs = Math.max(optionAnswerCooldownMs, attempt === 0 ? 1200 : 5200);
+      }
     }
+    throw new Error(`设置选项 ${optionId} 正确答案失败：${lastError?.message || '未知错误'}`);
   }
 
   function getAnswerIndexes(answer, optionCount) {
@@ -1721,7 +1741,7 @@
     const heading = document.createElement('h3');
     heading.textContent = '按投票组批量添加选项';
     const note = document.createElement('p');
-    note.textContent = '可将带题号、题目、A/B/C…选项和“答案”标记的完整投票文本一次粘贴到汇总框。系统会按题目标题匹配已勾选的投票，创建选项后同步设置正确答案。';
+    note.textContent = '可将带题号、题目、A/B/C…选项和“答案”标记的完整投票文本一次粘贴到汇总框。系统先完整导入并核对全部选项，再进入第二阶段统一设置正确答案。';
     const summaryBox = document.createElement('div');
     summaryBox.className = 'batch-vote-options-by-pack-summary';
     const summaryLabel = document.createElement('label');
@@ -1855,69 +1875,96 @@
       let reused = 0;
       let answersCompleted = 0;
       let processed = 0;
-      const failures = [];
+      const importFailures = [];
+      const answerFailures = [];
+      const warnings = [];
+      const importedItems = [];
+
+      // 第一阶段：只同步选项。全部题目都完成导入和数量核对后，才进入答案阶段。
       for (const item of plan) {
         if (!item.options.length) continue;
         const answerState = getAnswerIndexes(item.answer, item.options.length);
         let beforeRows = [];
         let itemOptionFailed = false;
         if (item.answer && answerState.error) {
-          failures.push(`${item.title}（ID：${item.id}）：${answerState.error}`);
+          answerFailures.push(`${item.title}（ID：${item.id}）：${answerState.error}`);
         }
         try {
           beforeRows = await loadOptionRecords(item);
         } catch (error) {
           itemOptionFailed = true;
-          failures.push(`${item.title}（ID：${item.id}）：读取现有选项失败，已停止处理本题：${error.message || '读取失败'}`);
+          importFailures.push(`${item.title}（ID：${item.id}）：读取现有选项失败：${error.message || '读取失败'}`);
         }
         for (const option of item.options) {
           processed += 1;
           if (itemOptionFailed) continue;
           const existing = beforeRows.filter(row => row.title === option);
-          status.textContent = `正在同步 ${processed}/${total}：${item.title}（ID：${item.id}）→ ${option}`;
-          if (existing.length === 1) {
+          status.textContent = `第一阶段：正在导入选项 ${processed}/${total}\n${item.title}（ID：${item.id}）→ ${option}`;
+          if (existing.length) {
             reused += 1;
-            continue;
-          }
-          if (existing.length > 1) {
-            itemOptionFailed = true;
-            failures.push(`${item.title}（ID：${item.id}）/ ${option}：发现 ${existing.length} 个同名选项，无法安全设置答案`);
+            if (existing.length > 1) {
+              warnings.push(`${item.title}（ID：${item.id}）/ ${option}：后台已有 ${existing.length} 条同名记录，已停止重复创建`);
+            }
             continue;
           }
           try {
             const result = await createOption(item, option);
-            beforeRows.push(result.row);
+            result.rows.forEach(row => {
+              if (!beforeRows.some(existingRow => existingRow.id === row.id)) beforeRows.push(row);
+            });
             if (result.reused) reused += 1;
             else completed += 1;
           } catch (error) {
             itemOptionFailed = true;
-            failures.push(`${item.title}（ID：${item.id}）/ ${option}：${error.message || '创建失败'}`);
+            importFailures.push(`${item.title}（ID：${item.id}）/ ${option}：${error.message || '创建失败'}`);
           }
         }
-        if (item.answer && !answerState.error && !itemOptionFailed) {
-          try {
-            status.textContent = `正在设置正确答案：${item.title} → ${item.answer}`;
-            const afterRows = await loadOptionRecords(item);
-            const resolved = resolveOptionRows(afterRows, item.options);
-            if (resolved.error) throw new Error(resolved.error);
-            const selectedIds = new Set(answerState.indexes.map(index => resolved.rows[index].id));
-            for (const row of afterRows) {
-              const expected = selectedIds.has(row.id);
-              if (row.answer === expected) continue;
-              await saveOptionAnswer(item, row.id, expected);
-            }
-            const verifiedRows = await loadOptionRecords(item);
-            const verified = verifiedRows.every(row => Boolean(row.answer) === selectedIds.has(row.id));
-            if (!verified) throw new Error('后台返回的正确答案状态与提交内容不一致');
-            answersCompleted += 1;
-          } catch (error) {
-            failures.push(`${item.title}（ID：${item.id}）正确答案 ${item.answer}：${error.message || '设置失败'}`);
+        if (itemOptionFailed) continue;
+        try {
+          const afterRows = await loadOptionRecords(item);
+          const missing = item.options.filter(title => !afterRows.some(row => row.title === title));
+          if (missing.length) {
+            importFailures.push(`${item.title}（ID：${item.id}）：导入后仍缺少选项：${missing.join('、')}`);
+            continue;
           }
+          importedItems.push({ item, answerState, rows: afterRows });
+        } catch (error) {
+          importFailures.push(`${item.title}（ID：${item.id}）：导入完成后的数量核对失败：${error.message || '读取失败'}`);
+        }
+      }
+
+      // 第二阶段：只对第一阶段已经完整导入的题目设置答案。
+      for (const imported of importedItems) {
+        const { item, answerState } = imported;
+        if (!item.answer || answerState.error) continue;
+        try {
+          status.textContent = `第二阶段：正在设置正确答案\n${item.title} → ${item.answer}`;
+          const afterRows = await loadOptionRecords(item);
+          const resolved = resolveOptionRows(afterRows, item.options);
+          if (resolved.error) throw new Error(`${resolved.error}；为避免错误设置，本题答案已跳过`);
+          const selectedIds = new Set(answerState.indexes.map(index => resolved.rows[index].id));
+          for (const row of afterRows) {
+            const expected = selectedIds.has(row.id);
+            if (row.answer === expected) continue;
+            await saveOptionAnswer(item, row.id, expected);
+          }
+          const verifiedRows = await loadOptionRecords(item);
+          const verified = verifiedRows.every(row => Boolean(row.answer) === selectedIds.has(row.id));
+          if (!verified) throw new Error('后台返回的正确答案状态与提交内容不一致');
+          answersCompleted += 1;
+        } catch (error) {
+          answerFailures.push(`${item.title}（ID：${item.id}）正确答案 ${item.answer}：${error.message || '设置失败'}`);
         }
       }
       const requestedAnswers = plan.filter(item => item.answer && !getAnswerIndexes(item.answer, item.options.length).error).length;
-      status.textContent = `选项同步完成：新建 ${completed} 个，复用 ${reused} 个；已设置 ${answersCompleted}/${requestedAnswers} 题正确答案。${failures.length ? `\n失败：${failures.join('\n')}` : ''}`;
-      if (!failures.length && completed + reused > 0) {
+      const failures = [...importFailures, ...answerFailures];
+      status.textContent = [
+        `第一阶段完成：新建 ${completed} 个选项，复用 ${reused} 个；完整导入 ${importedItems.length}/${plan.filter(item => item.options.length).length} 题。`,
+        `第二阶段完成：已设置 ${answersCompleted}/${requestedAnswers} 题正确答案。`,
+        warnings.length ? `提醒：${warnings.join('\n')}` : '',
+        failures.length ? `失败：${failures.join('\n')}` : '',
+      ].filter(Boolean).join('\n');
+      if (!failures.length && !warnings.length && completed + reused > 0) {
         refreshOptionFrames(plan.filter(item => item.options.length).map(item => item.id));
         status.textContent += '\n正在刷新列表……';
         window.setTimeout(refreshList, 350);
