@@ -629,6 +629,8 @@
 (() => {
   const BUTTON_ATTRIBUTE = 'data-codex-batch-next-stage';
   const MODAL_ID = 'codex-batch-next-stage-modal';
+  const ROUND_BUTTON_ATTRIBUTE = 'data-codex-quick-vote-round';
+  const ROUND_MODAL_ID = 'codex-quick-vote-round-modal';
 
   const text = element => (element?.textContent || '').replace(/\s+/g, ' ').trim();
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -646,7 +648,12 @@
     });
     if (!table) return null;
     const headings = [...table.querySelectorAll('thead th')].map(text);
-    return { table, headings, nameIndex: headings.indexOf('名称') };
+    return {
+      table,
+      headings,
+      nameIndex: headings.indexOf('名称'),
+      triggerIndex: headings.indexOf('触发阶段'),
+    };
   }
 
   function extractId(button) {
@@ -663,12 +670,19 @@
     return [...info.table.querySelectorAll('tbody tr')].map((row, index) => {
       const cells = [...row.children];
       const configButton = [...row.querySelectorAll('a,button')].find(item => text(item).includes('投票配置'));
+      const checkbox = row.querySelector('input[type="checkbox"]');
       return {
         name: text(cells[info.nameIndex]) || `第 ${index + 1} 个投票组`,
+        triggerScene: text(cells[info.triggerIndex]),
         id: extractId(configButton),
-        configButton
+        configButton,
+        selected: Boolean(checkbox?.checked || row.classList.contains('selected')),
       };
     }).filter(group => group.configButton);
+  }
+
+  function getSelectedGroups() {
+    return getGroups().filter(group => group.selected);
   }
 
   function commonParams() {
@@ -771,6 +785,92 @@
     }
   }
 
+  async function getSceneCatalog() {
+    const query = commonParams();
+    const response = await fetch(`/modules/drama/scene/list?${query.toString()}`, {
+      method: 'POST',
+      credentials: 'include',
+      cache: 'no-store',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+      body: new URLSearchParams({ pageNum: '1', pageSize: '1000' }).toString(),
+    });
+    const { data } = await parseResponse(response);
+    const rows = data?.rows || data?.data?.rows || (Array.isArray(data?.data) ? data.data : []);
+    if (!Array.isArray(rows) || !rows.length) throw new Error('没有读取到回合目录');
+    return rows.map(row => ({
+      id: String(row.id ?? row.sceneId ?? '').trim(),
+      title: String(row.title ?? row.name ?? '').replace(/\s+/g, ' ').trim(),
+    })).filter(scene => scene.id && scene.title);
+  }
+
+  function actionQuery(groupId) {
+    const query = commonParams();
+    query.set('relateType', '7');
+    query.set('relateId', groupId);
+    return query;
+  }
+
+  async function getVotePackActions(groupId) {
+    const response = await fetch(`/modules/drama/action/list?${actionQuery(groupId).toString()}`, {
+      method: 'POST',
+      credentials: 'include',
+      cache: 'no-store',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+      body: new URLSearchParams({ pageNum: '1', pageSize: '1000' }).toString(),
+    });
+    const { data } = await parseResponse(response);
+    const rows = data?.rows || data?.data?.rows || (Array.isArray(data?.data) ? data.data : []);
+    return Array.isArray(rows) ? rows : [];
+  }
+
+  async function createVotePackRoundAction(group, target) {
+    const body = new URLSearchParams({
+      name: target.title,
+      cate: '11',
+      paramA: target.id,
+      errorNext: '0',
+      break: '0',
+      delay: '0',
+      preCondition: '0',
+      priority: '0',
+      description: '所有角色进入回合',
+    });
+    const response = await fetch(`/modules/drama/action/add?${actionQuery(group.id).toString()}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+      body: body.toString(),
+    });
+    await parseResponse(response);
+  }
+
+  function buildRoundPlans(groups, catalog) {
+    return groups.map(group => {
+      const triggerTitle = String(group.triggerScene || '').replace(/\s+/g, ' ').trim();
+      const triggerIndex = catalog.findIndex(scene => scene.title === triggerTitle);
+      if (!triggerTitle || triggerTitle === '未设置') {
+        return { group, error: '投票组没有设置触发回合' };
+      }
+      if (triggerIndex < 0) {
+        return { group, error: `回合目录中没有找到触发回合“${triggerTitle}”` };
+      }
+      const target = catalog[triggerIndex + 1];
+      if (!target) {
+        return { group, error: `触发回合“${triggerTitle}”后面没有下一个回合` };
+      }
+      return { group, trigger: catalog[triggerIndex], target };
+    });
+  }
+
   function closeModal() { document.getElementById(MODAL_ID)?.remove(); }
 
   function addStyles() {
@@ -778,6 +878,14 @@
     const style = document.createElement('style');
     style.id = `${MODAL_ID}-style`;
     style.textContent = `#${MODAL_ID}{position:fixed;inset:0;background:rgba(0,0,0,.42);z-index:2147483647;display:flex;align-items:center;justify-content:center}#${MODAL_ID} .bns-panel{background:#fff;width:min(760px,90vw);max-height:82vh;overflow:auto;border-radius:8px;padding:28px 34px;box-shadow:0 12px 40px rgba(0,0,0,.25)}#${MODAL_ID} h3{margin:0 0 12px}#${MODAL_ID} .bns-list,#${MODAL_ID} .bns-status{white-space:pre-wrap;line-height:1.75;margin:14px 0;padding:12px;background:#f6f8fa;border-radius:4px}#${MODAL_ID} .bns-status{color:#1677c8}#${MODAL_ID} .bns-actions{text-align:right;margin-top:20px}#${MODAL_ID} button{margin-left:10px}`;
+    document.head.appendChild(style);
+  }
+
+  function addRoundStyles() {
+    if (document.getElementById(`${ROUND_MODAL_ID}-style`)) return;
+    const style = document.createElement('style');
+    style.id = `${ROUND_MODAL_ID}-style`;
+    style.textContent = `#${ROUND_MODAL_ID}{position:fixed;inset:0;background:rgba(0,0,0,.42);z-index:2147483647;display:flex;align-items:center;justify-content:center}#${ROUND_MODAL_ID} .qvr-panel{background:#fff;width:min(820px,92vw);max-height:86vh;overflow:auto;border-radius:8px;padding:26px 32px;box-shadow:0 12px 40px rgba(0,0,0,.25)}#${ROUND_MODAL_ID} h3{margin:0 0 12px}#${ROUND_MODAL_ID} p{color:#666;line-height:1.65}#${ROUND_MODAL_ID} .qvr-preview,#${ROUND_MODAL_ID} .qvr-status{white-space:pre-line;line-height:1.75;margin-top:14px;padding:12px 14px;background:#f5f9fd;border-radius:5px;color:#337ab7}#${ROUND_MODAL_ID} .qvr-error{color:#a94442;background:#fdf0f0}#${ROUND_MODAL_ID} .qvr-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}`;
     document.head.appendChild(style);
   }
 
@@ -809,12 +917,96 @@
     actions.append(cancel, confirm); panel.append(heading, note, list, status, actions); modal.appendChild(panel); document.body.appendChild(modal);
   }
 
+  function openRoundModal() {
+    document.getElementById(ROUND_MODAL_ID)?.remove();
+    addRoundStyles();
+    const groups = getSelectedGroups();
+    const modal = document.createElement('div'); modal.id = ROUND_MODAL_ID;
+    const panel = document.createElement('div'); panel.className = 'qvr-panel';
+    const heading = document.createElement('h3'); heading.textContent = '快速增加投票回合';
+    const note = document.createElement('p');
+    note.textContent = '仅处理当前勾选的投票组。系统按完整回合列表顺序找到“触发阶段”的下一回合，并在该投票组的“投票动作”中创建“所有角色进入回合”动作；已有相同目标动作会自动跳过。';
+    const preview = document.createElement('div'); preview.className = 'qvr-preview';
+    const status = document.createElement('div'); status.className = 'qvr-status';
+    const actions = document.createElement('div'); actions.className = 'qvr-actions';
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn btn-default'; cancel.textContent = '取消';
+    const confirm = document.createElement('button'); confirm.type = 'button'; confirm.className = 'btn btn-danger'; confirm.textContent = '正在读取回合顺序…'; confirm.disabled = true;
+    let plans = [];
+
+    if (!groups.length) {
+      preview.classList.add('qvr-error');
+      preview.textContent = '请先在投票组列表勾选至少一个投票组。';
+      confirm.textContent = '确认创建 0 个动作';
+    } else {
+      preview.textContent = `正在读取 ${groups.length} 个投票组对应的回合顺序……`;
+      getSceneCatalog().then(catalog => {
+        plans = buildRoundPlans(groups, catalog);
+        const valid = plans.filter(plan => !plan.error);
+        preview.textContent = plans.map((plan, index) => plan.error
+          ? `${index + 1}. ${plan.group.name}：${plan.error}`
+          : `${index + 1}. ${plan.group.name}：${plan.trigger.title} → ${plan.target.title}`
+        ).join('\n');
+        if (plans.some(plan => plan.error)) preview.classList.add('qvr-error');
+        status.textContent = `可创建 ${valid.length} 个回合跳转动作；识别失败 ${plans.length - valid.length} 个。`;
+        confirm.textContent = `确认创建 ${valid.length} 个动作`;
+        confirm.disabled = !valid.length;
+      }).catch(error => {
+        preview.classList.add('qvr-error');
+        preview.textContent = error.message || '读取回合目录失败';
+        confirm.textContent = '确认创建 0 个动作';
+      });
+    }
+
+    cancel.addEventListener('click', () => modal.remove());
+    confirm.addEventListener('click', async () => {
+      if (confirm.dataset.finished === 'true') {
+        modal.remove();
+        return;
+      }
+      const valid = plans.filter(plan => !plan.error);
+      if (!valid.length) return;
+      confirm.disabled = true; cancel.disabled = true;
+      let created = 0; let skipped = 0; const failures = [];
+      for (let index = 0; index < valid.length; index += 1) {
+        const plan = valid[index];
+        status.textContent = `正在处理 ${index + 1}/${valid.length}：${plan.group.name} → ${plan.target.title}`;
+        try {
+          const existing = await getVotePackActions(plan.group.id);
+          const duplicate = existing.some(action =>
+            String(action.cate ?? action.actionCate ?? '') === '11'
+            && String(action.paramA ?? action.targetId ?? '') === String(plan.target.id)
+          );
+          if (duplicate) skipped += 1;
+          else {
+            await createVotePackRoundAction(plan.group, plan.target);
+            const updated = await getVotePackActions(plan.group.id);
+            const saved = updated.some(action =>
+              String(action.cate ?? action.actionCate ?? '') === '11'
+              && String(action.paramA ?? action.targetId ?? '') === String(plan.target.id)
+            );
+            if (!saved) throw new Error('后台未返回新建的回合跳转动作');
+            created += 1;
+          }
+        } catch (error) {
+          failures.push(`${plan.group.name}：${error.message || '创建失败'}`);
+        }
+        await sleep(150);
+      }
+      status.textContent = `已创建 ${created} 个，跳过重复 ${skipped} 个。${failures.length ? `\n失败：${failures.join('\n')}` : ''}`;
+      confirm.textContent = '关闭'; confirm.disabled = false; confirm.dataset.finished = 'true'; cancel.style.display = 'none';
+    });
+    actions.append(cancel, confirm); panel.append(heading, note, preview, status, actions); modal.appendChild(panel); document.body.appendChild(modal);
+    modal.addEventListener('click', event => { if (event.target === modal && !confirm.disabled) modal.remove(); });
+  }
+
   function addButton() {
     if (!isVotePackPage() || document.querySelector(`[${BUTTON_ATTRIBUTE}]`)) return;
     const anchor = document.querySelector('[data-codex-batch-vote-pack]') || [...document.querySelectorAll('button,a')].find(item => text(item) === '批量添加投票组') || [...document.querySelectorAll('button,a')].find(item => /^\+?\s*添加$/.test(text(item)));
     if (!anchor) return;
     const button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn-warning'; button.style.marginLeft = '8px'; button.textContent = '批量增加下一阶段'; button.setAttribute(BUTTON_ATTRIBUTE, 'true'); button.onclick = openModal;
     anchor.insertAdjacentElement('afterend', button);
+    const roundButton = document.createElement('button'); roundButton.type = 'button'; roundButton.className = 'btn btn-warning'; roundButton.style.marginLeft = '8px'; roundButton.textContent = '快速增加投票回合'; roundButton.setAttribute(ROUND_BUTTON_ATTRIBUTE, 'true'); roundButton.onclick = openRoundModal;
+    button.insertAdjacentElement('afterend', roundButton);
   }
 
   const observer = new MutationObserver(addButton);

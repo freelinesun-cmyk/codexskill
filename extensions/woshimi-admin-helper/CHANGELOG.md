@@ -3,6 +3,18 @@
 本文件记录“我是谜后台辅助工具”的公开版本变化。后续每次发布都应先更新
 `manifest.json` 版本号和本文件，再提交源码、安装包并创建同名 Git 标签。
 
+## [2.5.14] - 2026-09-29
+
+### 新增
+
+- 投票组列表新增“快速增加投票回合”按钮，仅处理当前勾选的投票组。
+- 根据投票组已经识别的“触发阶段”，按完整回合列表顺序自动选择其下一个回合，并在该投票组的“投票动作”中创建“所有角色进入回合”动作。
+
+### 交互与校验
+
+- 提交前显示“投票组：触发回合 → 目标回合”预览，未设置触发回合、找不到触发回合或没有下一个回合的项目会明确报错且不提交。
+- 创建前检查现有投票动作，已有相同目标的回合跳转会自动跳过；创建后重新读取动作列表确认保存结果。
+
 ## [2.5.13] - 2026-09-29
 
 ### 新增
@@ -86,6 +98,8 @@
 
 - 将线索列表分页逻辑拆分到独立的 `clue.js`，减少与其他页面功能的耦合。
 
+[2.5.14]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.14/extensions/woshimi-admin-helper
+[2.5.13]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.13/extensions/woshimi-admin-helper
 [2.5.12]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.12/extensions/woshimi-admin-helper
 [2.5.11]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.11/extensions/woshimi-admin-helper
 [2.5.10]: https://github.com/freelinesun-cmyk/codexskill/tree/woshimi-admin-helper-v2.5.10/extensions/woshimi-admin-helper
